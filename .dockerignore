@@ -1,0 +1,19 @@
+.git
+.gitmodules
+.env
+.env.example
+.gitignore
+.dockerignore
+.DS_Store
+
+# don't pull the user's runtime config into the build context
+/config/
+
+# don't rebuild for doc changes
+README.md
+docs/
+
+# editor scratch
+.vscode/
+.idea/
+*.swp

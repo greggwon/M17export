@@ -1,0 +1,83 @@
+# =============================================================================
+# M17 Reflector (mrefd) - default deployment
+#
+# The mrefd service uses `network_mode: host` so IPv4 AND IPv6 traffic reaches
+# it without NAT rewriting. This is the recommended posture on any Linux host
+# with real public addresses (a Pi at home, a VPS, or bare metal). Ham-DHT
+# needs to advertise real external addresses, and NAT breaks that unless you
+# hand-configure MREFD_IPV[46]_EXT.
+#
+# The dashboard service runs on the compose bridge network with dual-stack
+# (IPv4 + IPv6) port bindings, so it stays isolated.
+#
+# If you MUST run mrefd in bridge mode (Docker Desktop on macOS/Windows,
+# shared-tenant hosts that forbid host networking), layer on
+# docker-compose.bridge.yml:
+#     docker compose -f docker-compose.yml -f docker-compose.bridge.yml up
+# =============================================================================
+
+services:
+
+  mrefd:
+    image: ${IMAGE_MREFD:-m17export/mrefd:latest}
+    build:
+      context: .
+      dockerfile: docker/mrefd/Dockerfile
+      args:
+        MREFD_BUILD_DEBUG: ${MREFD_BUILD_DEBUG:-false}
+        MREFD_BUILD_DHT:   ${MREFD_BUILD_DHT:-true}
+    container_name: mrefd
+    restart: unless-stopped
+    # Host networking: mrefd is directly reachable on the host's IPv4 and
+    # IPv6 addresses. Ports listed in .env (M17_PORT, DHT_PORT) are for your
+    # firewall config, not published by docker.
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      # Live-editable list files. mrefd's built-in file-watcher picks up
+      # changes without a restart.
+      - ./config/mrefd.whitelist:/etc/mrefd/mrefd.whitelist
+      - ./config/mrefd.blacklist:/etc/mrefd/mrefd.blacklist
+      - ./config/mrefd.interlink:/etc/mrefd/mrefd.interlink
+      # Shared with the dashboard container.
+      - mrefd-log:/var/log/mrefd
+      # DHT peer cache survives restarts.
+      - mrefd-state:/var/lib/mrefd
+
+  dashboard:
+    image: ${IMAGE_DASHBOARD:-m17export/mrefd-dashboard:latest}
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+    container_name: mrefd-dashboard
+    restart: unless-stopped
+    # Opt-in: `docker compose --profile dashboard up` (or `make up-dashboard`).
+    profiles: ["dashboard"]
+    env_file:
+      - .env
+    depends_on:
+      - mrefd
+    ports:
+      # Dual-stack publish: bind to both IPv4 and IPv6 wildcards.
+      - target: 80
+        published: "${DASHBOARD_PORT:-8080}"
+        host_ip: "0.0.0.0"
+        protocol: tcp
+      - target: 80
+        published: "${DASHBOARD_PORT:-8080}"
+        host_ip: "::"
+        protocol: tcp
+    volumes:
+      - mrefd-log:/var/log/mrefd:ro
+    networks:
+      - dashnet
+
+networks:
+  dashnet:
+    driver: bridge
+    enable_ipv6: true
+
+volumes:
+  mrefd-log:
+  mrefd-state:

@@ -1,0 +1,44 @@
+# =============================================================================
+# Bridge-mode override for the mrefd service.
+#
+# Use ONLY if host networking is not an option (Docker Desktop on macOS or
+# Windows, or shared-tenant environments). Bridge mode adds NAT between the
+# container and the outside world, which means:
+#
+#   * You should set MREFD_IPV4_EXT / MREFD_IPV6_EXT in .env to your real
+#     public addresses, or the DHT will publish a private container IP.
+#   * Both IPv4 and IPv6 host publishes are declared; the docker daemon must
+#     have `"ipv6": true` set in /etc/docker/daemon.json for the IPv6 side
+#     to actually work.
+#
+# Layer it in like this:
+#     docker compose -f docker-compose.yml -f docker-compose.bridge.yml up
+# =============================================================================
+
+services:
+  mrefd:
+    network_mode: ""      # clears the host-mode setting from the base file
+    networks:
+      - reflectornet
+    ports:
+      - target: 17000
+        published: "${M17_PORT:-17000}"
+        host_ip: "0.0.0.0"
+        protocol: udp
+      - target: 17000
+        published: "${M17_PORT:-17000}"
+        host_ip: "::"
+        protocol: udp
+      - target: 17171
+        published: "${DHT_PORT:-17171}"
+        host_ip: "0.0.0.0"
+        protocol: udp
+      - target: 17171
+        published: "${DHT_PORT:-17171}"
+        host_ip: "::"
+        protocol: udp
+
+networks:
+  reflectornet:
+    driver: bridge
+    enable_ipv6: true

@@ -1,0 +1,14 @@
+# local secrets and per-deployment settings
+.env
+
+# populated by `make init` from ./mrefd/config templates - each deployment's
+# own callsign/interlink data lives here and shouldn't be checked in.
+/config/mrefd.whitelist
+/config/mrefd.blacklist
+/config/mrefd.interlink
+
+# editor scratch
+.vscode/
+.idea/
+*.swp
+.DS_Store
