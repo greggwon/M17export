@@ -13,14 +13,32 @@ note() { echo "dashboard: $*" >&2; }
 : "${DASHBOARD_TZ:=UTC}"
 : "${DASHBOARD_IP_MODE:=ShowLast2ByteOfIP}"
 
-# Auto-detect IPs at container start if the operator didn't pin them.
-# Timeouts are tight so the dashboard still starts if there's no v4 or no v6.
+# Auto-detect external IPs at container start when the operator didn't pin
+# them. The original 3-second timeout was too tight when running inside the
+# dashboard's bridge network on first boot - curl silently timed out and the
+# dashboard showed NONE / NONE (reported by Tom @ etherham.com). Give each
+# probe a longer window with curl's built-in retry, and fall back to NONE
+# only after real failure.
+detect_ip() {
+    local flag="$1" out=""
+    out=$(curl "$flag" -fsS \
+              --connect-timeout 5 --max-time 15 \
+              --retry 3 --retry-delay 2 --retry-all-errors \
+              https://icanhazip.com 2>/dev/null \
+          | tr -d '[:space:]')
+    if [[ -n "$out" ]]; then
+        printf '%s' "$out"
+    else
+        printf 'NONE'
+    fi
+}
+
 if [[ -z "$DASHBOARD_IPV4" ]]; then
-    DASHBOARD_IPV4=$(curl -4 -fsS --max-time 3 https://icanhazip.com 2>/dev/null || echo "NONE")
+    DASHBOARD_IPV4=$(detect_ip -4)
     note "auto-detected IPv4: $DASHBOARD_IPV4"
 fi
 if [[ -z "$DASHBOARD_IPV6" ]]; then
-    DASHBOARD_IPV6=$(curl -6 -fsS --max-time 3 https://icanhazip.com 2>/dev/null || echo "NONE")
+    DASHBOARD_IPV6=$(detect_ip -6)
     note "auto-detected IPv6: $DASHBOARD_IPV6"
 fi
 
