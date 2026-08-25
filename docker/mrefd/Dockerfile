@@ -49,6 +49,16 @@ RUN make -j"$(nproc)" && \
     install -Dm755 mrefd /out/usr/local/bin/mrefd
 
 
+# --- advertiser build stage --------------------------------------------------
+# Pure-Go binary for the Bonjour advertiser lives in tools/m17-advertise/.
+# CGO_ENABLED=0 produces a fully static binary that drops into the slim
+# runtime image without pulling glibc.
+FROM golang:1.25-alpine AS advertise-build
+WORKDIR /src
+COPY tools/m17-advertise/ /src/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/m17-advertise .
+
+
 # --- runtime stage -----------------------------------------------------------
 FROM debian:12-slim AS runtime
 
@@ -69,16 +79,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /etc/mrefd /var/lib/mrefd /var/log/mrefd /var/run/mrefd \
     && chown -R mrefd:mrefd /etc/mrefd /var/lib/mrefd /var/log/mrefd /var/run/mrefd
 
-COPY --from=build /out/usr/local/bin/mrefd /usr/local/bin/mrefd
+COPY --from=build           /out/usr/local/bin/mrefd  /usr/local/bin/mrefd
+COPY --from=advertise-build /out/m17-advertise        /usr/local/bin/m17-advertise
 COPY docker/mrefd/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/m17-advertise
 
 USER mrefd
 
 # UDP - M17 protocol (default 17000)
 EXPOSE 17000/udp
+# TCP - authenticated TLS interlink (activated when interlink file has key: or tls: entries)
+EXPOSE 17000/tcp
 # UDP - Ham-DHT peer discovery
 EXPOSE 17171/udp
+# UDP - mDNS / Bonjour advertisement
+EXPOSE 5353/udp
 
 # tini reaps zombies and forwards signals so `docker stop` shuts mrefd down cleanly.
 ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
