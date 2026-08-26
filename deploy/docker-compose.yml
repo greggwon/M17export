@@ -1,0 +1,38 @@
+# =============================================================================
+# M17 Reflector deployment
+#
+# See README.md in this directory for the 5-step setup. This file is the
+# release manifest - the image tag below points at whichever build is
+# current. To upgrade, `docker compose pull && docker compose up -d`.
+# =============================================================================
+
+services:
+
+  mrefd:
+    # Change this line per release to pin a specific version, e.g.
+    #   image: ghcr.io/greggwon/mrefd:v1.2.0
+    image: ghcr.io/greggwon/mrefd:latest
+
+    container_name: mrefd
+    restart: unless-stopped
+
+    # Host networking: reachable on the host's real IPv4 and IPv6 addresses,
+    # no NAT, mDNS multicast flows to the LAN. This is what you want on any
+    # Linux host (Pi, VPS, EC2, bare metal). Docker Desktop for macOS or
+    # Windows silently downgrades this to bridged - see README.
+    network_mode: host
+
+    env_file:
+      - ./mrefd.env
+
+    volumes:
+      - ./config/mrefd.whitelist:/etc/mrefd/mrefd.whitelist
+      - ./config/mrefd.blacklist:/etc/mrefd/mrefd.blacklist
+      - ./config/mrefd.interlink:/etc/mrefd/mrefd.interlink
+      - ./config/tls:/etc/mrefd/tls:ro
+      - mrefd-log:/var/log/mrefd
+      - mrefd-state:/var/lib/mrefd
+
+volumes:
+  mrefd-log:
+  mrefd-state:

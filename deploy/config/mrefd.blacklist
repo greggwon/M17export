@@ -1,0 +1,3 @@
+# mrefd blacklist file.
+# One callsign per line. Wildcards allowed.
+# Empty file = no one blocked. mrefd hot-reloads on change.

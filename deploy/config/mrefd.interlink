@@ -1,0 +1,11 @@
+# mrefd interlink file.
+# Peer-reflector entries. mrefd hot-reloads on change.
+#
+# UDP forms (legacy interlink):
+#   M17-QQQ  ABC                          DHT-based peer discovery
+#   M17-URF  45.32.11.22  17000  BCD      static IP/port
+#   M17-QQQL 44.45.45.100 ABC             pre-1.0 "legacy L" peer
+#
+# TLS forms (authenticated, IP-independent):
+#   W5GGW-B  BCD  key:/etc/mrefd/tls/peers/W5GGW-B.pub.pem
+#   M17-HOM  BCD  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem

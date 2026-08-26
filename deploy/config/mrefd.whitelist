@@ -1,0 +1,3 @@
+# mrefd whitelist file.
+# One callsign per line. Wildcards allowed (K7*, W5G*).
+# Empty file = everyone allowed. mrefd hot-reloads on change.
