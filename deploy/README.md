@@ -1,6 +1,6 @@
 # Deploy an M17 Reflector
 
-Five steps. About 3 minutes on a fresh Linux host.
+Four steps. About 2 minutes on a fresh Linux host.
 
 ## 1. Prereqs (once per host)
 
@@ -21,16 +21,7 @@ cd M17export/deploy
 
 Or copy just the `deploy/` folder to the host.
 
-## 3. Log into the image registry (private image, needs a PAT)
-
-Create a GitHub Personal Access Token with the `read:packages` scope:
-<https://github.com/settings/tokens>
-
-```bash
-echo <YOUR_PAT> | docker login ghcr.io -u <YOUR_GH_USER> --password-stdin
-```
-
-## 4. Configure
+## 3. Configure
 
 ```bash
 cp mrefd.env.example mrefd.env
@@ -44,7 +35,7 @@ Note: the callsign must be exactly `M17-XYZ` (three A–Z/0–9 chars after
 `M17-`) and must not be already listed at <https://dvref.com>. If you're
 just testing before going public, pick something distinctive.
 
-## 5. Start it
+## 4. Start it
 
 ```bash
 docker compose up -d
@@ -74,8 +65,9 @@ To stop: `docker compose down`. To update to a newer image later:
 
 ## When something breaks
 
-- **`unauthorized` on pull** — `docker login ghcr.io` never happened, or the
-  PAT doesn't have `read:packages`.
+- **`unauthorized` on pull** — the image was flipped back to private and
+  you're not a package collaborator. Contact the maintainer or build
+  your own per [`BUILD.md`](BUILD.md).
 - **`no matching manifest for linux/amd64`** — the image was pushed for a
   single non-amd64 arch. Rebuild multi-arch from the source repo.
 - **`Is a directory` on any of the three list files** — Docker created a
