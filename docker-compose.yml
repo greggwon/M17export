@@ -31,6 +31,10 @@ services:
     # Host networking: mrefd is directly reachable on the host's IPv4 and
     # IPv6 addresses. Ports listed in .env (M17_PORT, DHT_PORT) are for your
     # firewall config, not published by docker.
+    # Firewall notes for a Linux deployment:
+    #   UDP  M17_PORT   (default 17000)  M17 protocol
+    #   UDP  DHT_PORT   (default 17171)  Ham-DHT
+    #   UDP  5353                          mDNS / Bonjour service advertisement
     network_mode: host
     env_file:
       - .env

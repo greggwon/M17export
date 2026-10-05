@@ -14,6 +14,10 @@ on dual-stack hosts.
 
 ---
 
+> **Full operator manual:** open [`docs/index.html`](docs/index.html) in a
+> browser for the complete setup guide, field-to-hub relay walkthrough, and
+> mDNS discovery reference.
+
 ## Contents
 
 1. [Why this project exists](#why-this-project-exists)
@@ -22,16 +26,17 @@ on dual-stack hosts.
 4. [Prerequisites](#prerequisites)
 5. [Quickstart](#quickstart)
 6. [Networking model (IPv4 + IPv6)](#networking-model-ipv4--ipv6)
-7. [Ports & firewall](#ports--firewall)
-8. [Configuration reference](#configuration-reference)
-9. [Interlinking and DVREF](#interlinking-and-dvref)
-10. [Multi-architecture image builds](#multi-architecture-image-builds)
-11. [Upstream patch posture](#upstream-patch-posture)
-12. [Operational lifecycle](#operational-lifecycle)
-13. [Updating](#updating)
-14. [Troubleshooting](#troubleshooting)
-15. [Related sibling app: MSeven](#related-sibling-app-mseven)
-16. [Credits & license](#credits--license)
+7. [Bonjour / mDNS discovery](#bonjour--mdns-discovery)
+8. [Ports & firewall](#ports--firewall)
+9. [Configuration reference](#configuration-reference)
+10. [Interlinking and DVREF](#interlinking-and-dvref)
+11. [Multi-architecture image builds](#multi-architecture-image-builds)
+12. [Upstream patch posture](#upstream-patch-posture)
+13. [Operational lifecycle](#operational-lifecycle)
+14. [Updating](#updating)
+15. [Troubleshooting](#troubleshooting)
+16. [Related sibling app: MSeven](#related-sibling-app-mseven)
+17. [Credits & license](#credits--license)
 
 ---
 
@@ -213,19 +218,90 @@ In bridge mode you probably want to set `MREFD_IPV4_EXT` / `MREFD_IPV6_EXT`
 in `.env` to your public addresses, or the DHT will advertise the container's
 internal IP.
 
+### macOS Docker Desktop quirks
+
+Docker Desktop's Mac implementation of `network_mode: host` does **not**
+actually give the container access to the host's network stack — it silently
+becomes bridged. That means on macOS you must use the bridge overlay:
+
+```
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml \
+    --profile dashboard up -d
+```
+
+Two related quirks that will bite you on Docker Desktop for Mac:
+
+1. **UDP dual-stack publish bug.** Declaring the same UDP port as both
+   `0.0.0.0` and `[::]` results in only the IPv6 socket actually binding;
+   IPv4 sends hit ICMP port unreachable ("Connection refused" in the
+   client). The bridge compose file works around this by publishing UDP
+   ports on IPv4 only. TCP is unaffected and stays dual-stack.
+2. **UDP 5353 (mDNS) is owned by macOS.** The host's own mDNSResponder
+   already binds it, so container publishing collides. Bonjour advertisement
+   from inside the container cannot reach the LAN on macOS. Set
+   `MREFD_ADVERTISE_ENABLED=false` and run `tools/m17-advertise` natively on
+   the host if you need MSeven to see the reflector during Mac-side
+   development.
+
+Neither quirk affects real Linux deployments (Pi, VPS, bare metal). Host
+networking works there and mDNS multicast flows to the LAN natively.
+
+---
+
+## Bonjour / mDNS discovery
+
+The container includes `tools/m17-advertise`, a small Go binary that
+publishes the reflector as a `_m17._udp` service so that MSeven (and any
+Bonjour-aware M17 client) can auto-populate its connection list from
+whatever LAN the operator is on. Field ARES kits get local discovery for
+free — bring the Pi up on the event Wi-Fi and every MSeven device on that
+network sees it.
+
+TXT record fields mirror one entry from MSeven's
+[sites.json](http://mseven.wonderly.org/mseven/sites.json.gz) `reflectors[]`
+schema. The advertiser fills the TXT from a combination of:
+
+- Standard mrefd env vars (`MREFD_CALLSIGN`, `MREFD_MODULES`, `MREFD_PORT`,
+  `MREFD_SPONSOR`, `MREFD_COUNTRY`, `MREFD_DASHBOARD_URL`,
+  `MREFD_ENCRYPTION_ALLOWED`, `MREFD_IPV4_EXT`, `MREFD_IPV6_EXT`) —
+  auto-derived (designator, slug, ipv4/ipv6 auto-detected when unset)
+- Optional MSeven-schema fields: `MREFD_ADVERTISE_NAME`,
+  `MREFD_ADVERTISE_DESCRIPTION`, `MREFD_ADVERTISE_NETWORK_TYPE`
+- Optional bind-mounted `MREFD_ADVERTISE_CONFIG` JSON (a single
+  `reflectors[]` entry) as a base layer that env vars overlay on top of
+
+The advertiser starts 10 seconds after `mrefd` binds so the service is
+already accepting connections by the time it becomes discoverable. Disable
+with `MREFD_ADVERTISE_ENABLED=false`.
+
+Standalone (non-container) use for testing or non-mrefd reflectors:
+
+```
+tools/m17-advertise --config path/to/entry.json                    # from JSON
+tools/m17-advertise --designator TUL --slug m17-tul --port 17000 \  # or flags
+                    --modules "A,B,C,D,E" --sponsor "..." --url "..."
+```
+
+Individual flags override values loaded from `--config`. See
+`tools/m17-advertise/main.go` `--help` for the full list.
+
 ---
 
 ## Ports & firewall
 
-| Purpose               | Proto | Default port | Direction | Required when                       |
-|-----------------------|-------|--------------|-----------|-------------------------------------|
-| M17 protocol          | UDP   | 17000        | inbound   | always                              |
-| Ham-DHT peer discovery| UDP   | 17171        | inbound   | `MREFD_DHT_ENABLED=true`            |
-| Web dashboard (HTTP)  | TCP   | 8080         | inbound   | dashboard profile started           |
-| Web dashboard (HTTPS) | TCP   | 443          | inbound   | if you front the dashboard with TLS |
+| Purpose                    | Proto | Default port | Direction | Required when                                        |
+|----------------------------|-------|--------------|-----------|------------------------------------------------------|
+| M17 protocol               | UDP   | 17000        | inbound   | always                                               |
+| TLS-authenticated interlink| TCP   | 17000        | inbound   | interlink file has `key:` or `tls:` entries          |
+| Ham-DHT peer discovery     | UDP   | 17171        | inbound   | `MREFD_DHT_ENABLED=true`                             |
+| Bonjour / mDNS advertise   | UDP   | 5353         | local LAN | `MREFD_ADVERTISE_ENABLED=true` (default)             |
+| Web dashboard (HTTP)       | TCP   | 8080         | inbound   | dashboard profile started                            |
+| Web dashboard (HTTPS)      | TCP   | 443          | inbound   | if you front the dashboard with TLS                  |
 
 Open the corresponding ports on your router/firewall for **both** IPv4 and
-IPv6 wherever you have dual-stack connectivity.
+IPv6 wherever you have dual-stack connectivity. Note that UDP 5353 is
+LAN-only (multicast) — no router configuration needed, but it does need to
+reach the container's network namespace; see the macOS quirks section below.
 
 ---
 
@@ -291,6 +367,31 @@ over the air.
 | `DASHBOARD_TZ`         | tz database name (e.g. `America/Phoenix`)            |
 | `DASHBOARD_IP_MODE`    | IP privacy on Links/Peers pages                      |
 | `DASHBOARD_MODULE_<X>` | Friendly name shown next to module letter `<X>`      |
+
+### Bonjour / mDNS advertiser
+
+| Var                            | Purpose                                                                 |
+|--------------------------------|-------------------------------------------------------------------------|
+| `MREFD_ADVERTISE_ENABLED`      | `true`/`false`. Default `true`. Set false on macOS/Windows Docker Desktop |
+| `MREFD_ADVERTISE_NAME`         | Optional human-readable name (MSeven schema `name`)                     |
+| `MREFD_ADVERTISE_DESCRIPTION`  | Optional description; HTML permitted                                    |
+| `MREFD_ADVERTISE_NETWORK_TYPE` | `hosting` / `business` / `residential`                                  |
+| `MREFD_ADVERTISE_CONFIG`       | Container path to a `reflectors[]`-schema JSON to use as base           |
+
+### TLS interlink
+
+| Var                        | Purpose                                                                 |
+|----------------------------|-------------------------------------------------------------------------|
+| `MREFD_TLS_SERVER_CERT`    | PEM cert for the reflector's TLS listener (home side)                   |
+| `MREFD_TLS_SERVER_KEY`     | PEM key matching the server cert                                        |
+| `MREFD_TLS_CLIENT_CERT`    | PEM cert this reflector presents to peers it dials (field side)         |
+| `MREFD_TLS_CLIENT_KEY`     | PEM key matching the client cert                                        |
+| `MREFD_TLS_PORT`           | TCP port for the TLS listener. Default = `MREFD_PORT` (17000)           |
+| `MREFD_TLS_BIND_ADDR`      | TLS listener bind address. Default = `MREFD_IPV6_BIND` or `0.0.0.0`     |
+| `MREFD_TLS_TIMESTAMP_SKEW` | Allowed BIRTH-timestamp skew, seconds. Default `300`                    |
+
+Full protocol / handshake / config-file syntax:
+[docs/tls-interlink-design.md](docs/tls-interlink-design.md).
 
 ---
 
@@ -442,6 +543,26 @@ docker buildx build --pull ...      # or `make build-local` after `docker pull d
   building against a mrefd revision that predates the users.cpp fix and the
   sed patch didn't match. Confirm the Dockerfile's sed line still matches
   the source in your submodule.
+- **MSeven says "Connection refused" on UDP 17000 from macOS** — Docker
+  Desktop's UDP dual-stack publish bug. Use `docker-compose.bridge.yml`
+  (which already publishes UDP on IPv4 only) and verify with
+  `lsof -iUDP:17000` — you should see a `com.docke ... IPv4 ... UDP *:17000`
+  entry. If it only shows IPv6, the container isn't reachable via IPv4.
+- **MSeven never discovers the reflector on Wi-Fi from Docker Desktop
+  (Mac/Windows)** — expected. Docker Desktop can't publish mDNS multicast
+  to the host LAN. Set `MREFD_ADVERTISE_ENABLED=false` and run
+  `tools/m17-advertise` natively on the host, or deploy on a real Linux
+  host with host networking.
+- **mDNS SRV target shows `hostname.local.local.`** — old advertiser build.
+  Rebuild `tools/m17-advertise`; the fix uses `RegisterProxy` with a
+  cleaned hostname.
+- **Advertiser publishes but MSeven shows the address as
+  `@ip%interface`** — same as above; MSeven's fallback formatting for a
+  doubled-`.local.local.` SRV target.
+- **Bind-mounted file becomes an empty directory on the host** —
+  Docker's classic bind-mount trap: if the host path doesn't exist when
+  the container starts, Docker creates a directory. Stop the container,
+  remove the empty directory, `touch` the file into place, restart.
 
 ---
 

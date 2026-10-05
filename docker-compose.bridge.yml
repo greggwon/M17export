@@ -21,22 +21,36 @@ services:
     networks:
       - reflectornet
     ports:
+      # Docker Desktop for Mac has a known quirk where declaring the same
+      # UDP port on both 0.0.0.0 and :: results in only the IPv6 socket
+      # actually binding, and the IPv4 side returns ICMP port unreachable.
+      # Publish v4 explicitly first (and only) here; the [::] bind will
+      # accept IPv6 clients via v4-mapped addresses on most kernels.
       - target: 17000
         published: "${M17_PORT:-17000}"
         host_ip: "0.0.0.0"
         protocol: udp
+      # TCP 17000 - authenticated TLS interlink (used when the interlink
+      # file contains key: or tls: entries; harmless when it doesn't).
+      - target: 17000
+        published: "${M17_PORT:-17000}"
+        host_ip: "0.0.0.0"
+        protocol: tcp
       - target: 17000
         published: "${M17_PORT:-17000}"
         host_ip: "::"
-        protocol: udp
+        protocol: tcp
       - target: 17171
         published: "${DHT_PORT:-17171}"
         host_ip: "0.0.0.0"
         protocol: udp
-      - target: 17171
-        published: "${DHT_PORT:-17171}"
-        host_ip: "::"
-        protocol: udp
+      # mDNS/Bonjour (UDP 5353) is INTENTIONALLY not published here.
+      # On Linux with `network_mode: host`, the advertiser reaches the LAN
+      # natively (no port publish needed). On Docker Desktop for Mac /
+      # Windows, UDP 5353 is already owned by the host's own mDNSResponder,
+      # so publishing collides. On those platforms set
+      # MREFD_ADVERTISE_ENABLED=false and run tools/m17-advertise natively
+      # on the host instead.
 
 networks:
   reflectornet:

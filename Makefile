@@ -19,8 +19,8 @@ BUILDER          = m17-builder
 COMPOSE = docker compose
 
 .PHONY: help init submodules build build-local build-mrefd build-dashboard \
-        up up-dashboard down restart logs logs-mrefd logs-dashboard \
-        shell shell-dashboard status ps clean prune buildx-setup verify-env
+	up up-dashboard down restart logs logs-mrefd logs-dashboard \
+	shell shell-dashboard status ps clean prune buildx-setup verify-env
 
 help:                          ## Show this help
 	@awk 'BEGIN {FS=":.*##"; printf "\nUsage: make \033[1m<target>\033[0m\n\nTargets:\n"} \
@@ -77,6 +77,69 @@ build: buildx-setup submodules ## Multi-arch build for BUILD_PLATFORMS (loads lo
 build-local: submodules build-mrefd build-dashboard   ## Native arch, loaded into local docker
 	@echo "==> local images ready"
 
+#################################################################################################
+#
+#  Test/development building and release push
+#
+#################################################################################################
+#MREFD_VERSION := $(shell cd mrefd && git describe --tags --always --dirty 2>/dev/null || echo unknown)
+MREFD_VERSION := $(shell sed -nE 's/CVersion g_Version\(([0-9]+), *([0-9]+), *([0-9]+)\).*/\1.\2.\3/p' mrefd/version.cpp 2>/dev/null | head -1)
+ifeq ($(MREFD_VERSION),)
+MREFD_VERSION := unknown
+endif
+BUILD_DATE    := $(shell date -u +%Y%m%d)
+BUILD_SHA     := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
+IMAGE_TAG     := mrefd-$(MREFD_VERSION)-b$(BUILD_DATE)
+IMAGE         := ghcr.io/greggwon/mrefd
+PLATFORMS     := linux/386,linux/amd64,linux/arm64,linux/arm/v7
+MY_BUILD      := $(shell date -u '+%H%M%S')-$(BUILD_SHA)
+
+.PHONY: build-release build-test build-local create-builder show-version
+
+show-version:
+	@echo "release: $(IMAGE):latest + $(IMAGE):$(IMAGE_TAG)-$(MY_BUILD)"
+	@echo "build:   $(IMAGE):build  + $(IMAGE):build-$(MY_BUILD)"
+	@echo "local:   $(IMAGE):local  + $(IMAGE):$(IMAGE_TAG)-$(MY_BUILD)  (loaded into local daemon, native arch only)"
+
+build-release: create-builder
+	docker buildx build \
+		--builder m17-builder \
+		--platform $(PLATFORMS) \
+		--file docker/mrefd/Dockerfile \
+		--tag $(IMAGE):latest \
+		--tag $(IMAGE):build-$(MY_BUILD) \
+		--tag $(IMAGE):$(IMAGE_TAG) \
+		--push .
+	docker pull $(IMAGE):$(IMAGE_TAG)
+
+build-test: create-builder
+	docker buildx build \
+		--builder m17-builder \
+		--platform $(PLATFORMS) \
+		--file docker/mrefd/Dockerfile \
+		--tag $(IMAGE):test \
+		--tag $(IMAGE):build-$(MY_BUILD) \
+		--tag $(IMAGE):test-$(IMAGE_TAG) \
+		--push .
+	docker pull $(IMAGE):test-$(IMAGE_TAG)
+
+build-local:
+	docker build \
+		--file docker/mrefd/Dockerfile \
+		--tag $(IMAGE):local \
+		--tag $(IMAGE):build-$(MY_BUILD) \
+		--tag $(IMAGE):$(IMAGE_TAG) \
+		.
+
+create-builder:
+	@docker buildx inspect m17-builder >/dev/null 2>&1 || \
+		docker buildx create --name m17-builder --driver docker-container
+	# Start the builder if not running
+	@docker buildx inspect --bootstrap m17-builder >/dev/null
+
+######################################################################################
+
+
 build-mrefd:
 	docker build \
 	    --file docker/mrefd/Dockerfile \
@@ -106,7 +169,7 @@ restart:                       ## Restart mrefd (picks up .env changes)
 	$(COMPOSE) --profile dashboard restart
 
 logs:                          ## Follow logs for all services
-	$(COMPOSE) --profile dashboard logs -f --tail=200
+$(COMPOSE) --profile dashboard logs -f --tail=200
 
 logs-mrefd:
 	$(COMPOSE) logs -f --tail=200 mrefd

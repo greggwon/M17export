@@ -90,5 +90,75 @@ for f in mrefd.whitelist mrefd.blacklist mrefd.interlink; do
     fi
 done
 
+# ---- start mrefd + Bonjour advertiser --------------------------------------
+# mrefd is the primary process; if it exits, the container exits with its
+# code. The Bonjour advertiser starts 10 seconds later so that mrefd is
+# already bound and accepting traffic by the time the service becomes
+# discoverable on the LAN. Both children receive forwarded SIGTERM/SIGINT.
+
+MREFD_PID=""
+ADV_PID=""
+shutdown() {
+    note "shutting down"
+    [[ -n "$MREFD_PID" ]] && kill -TERM "$MREFD_PID" 2>/dev/null || true
+    [[ -n "$ADV_PID"   ]] && kill -TERM "$ADV_PID"   2>/dev/null || true
+    wait 2>/dev/null || true
+    exit 0
+}
+trap shutdown TERM INT
+
 note "starting mrefd as ${MREFD_CALLSIGN} on modules ${MREFD_MODULES}, UDP ${MREFD_PORT}"
-exec /usr/local/bin/mrefd "$CFG"
+/usr/local/bin/mrefd "$CFG" &
+MREFD_PID=$!
+
+# ---- advertiser (optional; on by default) ----------------------------------
+if [[ "${MREFD_ADVERTISE_ENABLED:-true}" == "true" ]]; then
+    (
+        # Wait for mrefd to be up and listening. Keeps the mDNS announcement
+        # from telling clients "here I am!" before we can actually serve.
+        sleep 10
+
+        # Derive slug and designator from callsign.
+        # MREFD_CALLSIGN = "M17-020" -> designator=020, slug=m17-020
+        _designator="${MREFD_CALLSIGN#M17-}"
+        _slug=$(printf '%s' "$MREFD_CALLSIGN" | tr '[:upper:]' '[:lower:]')
+
+        # Comma-separate the module strings so m17-advertise's --modules /
+        # --encrypted flags see the same shape they'd get from CLI use.
+        _split() { printf '%s' "$1" | sed -e 's/./&,/g' -e 's/,$//'; }
+
+        ADV=(--designator "$_designator" --slug "$_slug"
+             --port "$MREFD_PORT"
+             --modules "$(_split "$MREFD_MODULES")")
+
+        [[ -n "${MREFD_COUNTRY:-}"              ]] && ADV+=(--country      "$MREFD_COUNTRY")
+        [[ -n "${MREFD_SPONSOR:-}"              ]] && ADV+=(--sponsor      "$MREFD_SPONSOR")
+        [[ -n "${MREFD_DASHBOARD_URL:-}"        ]] && ADV+=(--url          "$MREFD_DASHBOARD_URL")
+        [[ -n "${MREFD_ENCRYPTION_ALLOWED:-}"   ]] && ADV+=(--encrypted    "$(_split "$MREFD_ENCRYPTION_ALLOWED")")
+        [[ -n "${MREFD_IPV4_EXT:-}"             ]] && ADV+=(--ipv4         "$MREFD_IPV4_EXT")
+        [[ -n "${MREFD_IPV6_EXT:-}"             ]] && ADV+=(--ipv6         "$MREFD_IPV6_EXT")
+        [[ -n "${MREFD_ADVERTISE_NAME:-}"       ]] && ADV+=(--name         "$MREFD_ADVERTISE_NAME")
+        [[ -n "${MREFD_ADVERTISE_DESCRIPTION:-}" ]] && ADV+=(--description  "$MREFD_ADVERTISE_DESCRIPTION")
+        [[ -n "${MREFD_ADVERTISE_NETWORK_TYPE:-}" ]] && ADV+=(--network-type "$MREFD_ADVERTISE_NETWORK_TYPE")
+
+        # If a bind-mounted site.json is present, use it as base; per-field
+        # env vars still overlay on top (m17-advertise flag semantics).
+        SITE="${MREFD_ADVERTISE_CONFIG:-/etc/mrefd/site.json}"
+        if [[ -f "$SITE" ]]; then
+            ADV=(--config "$SITE" "${ADV[@]}")
+        fi
+
+        note "starting Bonjour advertiser for ${_slug}"
+        exec /usr/local/bin/m17-advertise "${ADV[@]}"
+    ) &
+    ADV_PID=$!
+else
+    note "advertiser disabled (MREFD_ADVERTISE_ENABLED=false)"
+fi
+
+# Wait for mrefd; the advertiser is best-effort and its exit is not fatal.
+wait "$MREFD_PID"
+MREFD_RC=$?
+[[ -n "$ADV_PID" ]] && kill -TERM "$ADV_PID" 2>/dev/null || true
+wait 2>/dev/null || true
+exit "$MREFD_RC"
