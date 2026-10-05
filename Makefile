@@ -91,7 +91,7 @@ BUILD_DATE    := $(shell date -u +%Y%m%d)
 BUILD_SHA     := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 IMAGE_TAG     := mrefd-$(MREFD_VERSION)-b$(BUILD_DATE)
 IMAGE         := ghcr.io/greggwon/mrefd
-PLATFORMS     := linux/386,linux/amd64,linux/arm64
+PLATFORMS     := linux/386,linux/amd64,linux/arm64,linux/arm/v7
 MY_BUILD      := $(shell date -u '+%H%M%S')-$(BUILD_SHA)
 
 .PHONY: build-release build-test build-local create-builder show-version

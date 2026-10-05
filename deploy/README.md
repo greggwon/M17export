@@ -68,8 +68,13 @@ To stop: `docker compose down`. To update to a newer image later:
 - **`unauthorized` on pull** — the image was flipped back to private and
   you're not a package collaborator. Contact the maintainer or build
   your own per [`BUILD.md`](BUILD.md).
-- **`no matching manifest for linux/amd64`** — the image was pushed for a
-  single non-amd64 arch. Rebuild multi-arch from the source repo.
+- **`no matching manifest for linux/arm/v7`** — you're pulling a tag
+  published before 32-bit ARM was added to the release build. Pull
+  `:latest`, check the tag with
+  `docker buildx imagetools inspect ghcr.io/greggwon/mrefd:<tag>`, or build
+  from source per [`BUILD.md`](BUILD.md) Option B.
+- **`no matching manifest`** for any other platform — the image was pushed
+  without that architecture. Rebuild multi-arch from the source repo.
 - **`Is a directory` on any of the three list files** — Docker created a
   bind-mount target as a directory. This dir already has real files for
   those; if you deleted them, `touch config/mrefd.{whitelist,blacklist,interlink}`.
@@ -94,6 +99,10 @@ variable public IP, a private mesh you don't want on dvref, etc.
 
 ## Building your own image
 
-If you'd rather build the image yourself (a fork, a private registry, or
-air-gapped) instead of pulling the public tag, see [`BUILD.md`](BUILD.md)
-in this directory.
+To make your own image, see [`BUILD.md`](BUILD.md) in this directory:
+
+- **Option A** customizes the published image: a short Dockerfile
+  `FROM ghcr.io/greggwon/mrefd` adds your `site.json`, default interlink
+  file or tools. No source and no compiling; it builds in seconds.
+- **Option B** builds from source, for a fork, an mrefd patch, or an
+  air-gapped setup.

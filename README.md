@@ -14,6 +14,10 @@ on dual-stack hosts.
 
 ---
 
+> **Full operator manual:** open [`docs/index.html`](docs/index.html) in a
+> browser for the complete setup guide, field-to-hub relay walkthrough, and
+> mDNS discovery reference.
+
 ## Contents
 
 1. [Why this project exists](#why-this-project-exists)

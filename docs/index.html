@@ -1,0 +1,1199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M17export Operator Manual</title>
+<meta name="description" content="Operator manual for M17export: a containerized fork of the mrefd M17 reflector built to relay field nodes into wider-area hub instances, with Bonjour/mDNS discovery for local support networks.">
+<style>
+:root {
+  --bg: #fbfaf7;
+  --surface: #ffffff;
+  --surface-2: #f2f0ea;
+  --text: #1d1f23;
+  --muted: #5b606a;
+  --rule: #dcd8ce;
+  --accent: #1f5f8b;
+  --accent-soft: #e3eef6;
+  --code-bg: #f4f2ec;
+  --note-bg: #eef5ea; --note-rule: #5c8a3a;
+  --warn-bg: #fbf1e1; --warn-rule: #b9771d;
+  --stat-bg: #eceaf7; --stat-rule: #5a4fa0;
+  --diagram-fill: #ffffff;
+  --diagram-zone: #f2f0ea;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171b; --surface: #1c1f24; --surface-2: #23272d;
+    --text: #e6e4df; --muted: #a2a6ad; --rule: #353a42;
+    --accent: #7fb6dd; --accent-soft: #1f3343; --code-bg: #20242a;
+    --note-bg: #1d2a1a; --note-rule: #8cbf68;
+    --warn-bg: #2f2616; --warn-rule: #e0a24a;
+    --stat-bg: #24223a; --stat-rule: #a49be0;
+    --diagram-fill: #1c1f24; --diagram-zone: #23272d;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15171b; --surface: #1c1f24; --surface-2: #23272d;
+  --text: #e6e4df; --muted: #a2a6ad; --rule: #353a42;
+  --accent: #7fb6dd; --accent-soft: #1f3343; --code-bg: #20242a;
+  --note-bg: #1d2a1a; --note-rule: #8cbf68;
+  --warn-bg: #2f2616; --warn-rule: #e0a24a;
+  --stat-bg: #24223a; --stat-rule: #a49be0;
+  --diagram-fill: #1c1f24; --diagram-zone: #23272d;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.65 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-underline-offset: 2px; }
+.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
+nav.toc {
+  position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+  padding: 32px 20px 40px 24px; border-right: 1px solid var(--rule); font-size: 14px;
+}
+nav.toc .brand { font: 600 18px/1.3 var(--serif); margin: 0 0 4px; }
+nav.toc .brand-sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+nav.toc > ol > li { counter-increment: toc; margin: 2px 0; }
+nav.toc > ol > li > a::before { content: counter(toc) ". "; color: var(--muted); }
+nav.toc ol ol { padding-left: 16px; margin: 2px 0 6px; }
+nav.toc a { color: var(--text); text-decoration: none; display: block; padding: 3px 6px; border-radius: 4px; }
+nav.toc a:hover { background: var(--surface-2); }
+nav.toc ol ol a { color: var(--muted); font-size: 13px; }
+main { padding: 40px 56px 96px; min-width: 0; }
+.doc-head { border-bottom: 2px solid var(--text); padding-bottom: 20px; margin-bottom: 36px; }
+.doc-head .kicker { text-transform: uppercase; letter-spacing: .12em; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+h1 { font: 600 40px/1.15 var(--serif); margin: 0 0 12px; }
+.doc-head p.lede { font-size: 18px; color: var(--muted); max-width: 46em; margin: 0; }
+.doc-meta { margin-top: 16px; font-size: 13px; color: var(--muted); display: flex; gap: 20px; flex-wrap: wrap; }
+section { margin: 0 0 56px; max-width: 52em; }
+h2 { font: 600 28px/1.25 var(--serif); margin: 0 0 16px; padding-top: 8px; border-top: 1px solid var(--rule); padding-top: 28px; }
+h2 .num { color: var(--muted); font-weight: 400; margin-right: 8px; }
+h3 { font: 600 20px/1.3 var(--serif); margin: 32px 0 10px; }
+h4 { font-size: 15px; margin: 22px 0 6px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+p, ul, ol { margin: 0 0 14px; }
+li { margin: 4px 0; }
+code { font: 0.88em var(--mono); background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+pre {
+  font: 13.5px/1.55 var(--mono); background: var(--code-bg); border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent); border-radius: 4px; padding: 14px 16px; overflow-x: auto; margin: 0 0 18px;
+}
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+pre .c { color: var(--muted); }
+.table-wrap { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--rule); border-radius: 4px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; background: var(--surface); }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+td code { white-space: nowrap; }
+.callout { border-left: 4px solid; border-radius: 4px; padding: 12px 16px; margin: 0 0 18px; }
+.callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+.callout .label { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; display: block; margin-bottom: 4px; }
+.note { background: var(--note-bg); border-color: var(--note-rule); }
+.warn { background: var(--warn-bg); border-color: var(--warn-rule); }
+.status { background: var(--stat-bg); border-color: var(--stat-rule); }
+.steps { counter-reset: step; list-style: none; padding: 0; }
+.steps > li { counter-increment: step; position: relative; padding-left: 44px; margin: 0 0 22px; }
+.steps > li::before {
+  content: counter(step); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: var(--bg); font-weight: 700; font-size: 14px; display: grid; place-items: center;
+}
+.steps > li > strong:first-child { display: block; margin-bottom: 4px; }
+figure { margin: 8px 0 26px; }
+figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+.svg-box { fill: var(--diagram-fill); stroke: var(--text); stroke-width: 1.4; }
+.svg-zone { fill: var(--diagram-zone); stroke: var(--rule); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.svg-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.svg-t { fill: var(--text); font: 13px var(--sans); }
+.svg-tb { fill: var(--text); font: 600 14px var(--sans); }
+.svg-tm { fill: var(--muted); font: 12px var(--sans); }
+.svg-mono { fill: var(--text); font: 12px var(--mono); }
+.svg-line { stroke: var(--text); stroke-width: 1.4; fill: none; }
+.svg-dash { stroke: var(--accent); stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; }
+.svg-strong { stroke: var(--accent); stroke-width: 2.4; fill: none; }
+.svg-arrowhead { fill: var(--text); }
+.svg-arrowhead-a { fill: var(--accent); }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 0 0 18px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; }
+.card h4 { margin-top: 0; }
+.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+dl.gloss { margin: 0 0 18px; }
+dl.gloss dt { font-weight: 600; margin-top: 12px; }
+dl.gloss dd { margin: 2px 0 0 0; color: var(--text); }
+.theme-toggle {
+  margin-top: 24px; font: 13px var(--sans); background: var(--surface); color: var(--text);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 5px 10px; cursor: pointer;
+}
+.menu-btn { display: none; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; max-width: 52em; }
+
+@media (max-width: 900px) {
+  .layout { display: block; }
+  nav.toc { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--rule); padding: 20px 16px; }
+  nav.toc ol { display: none; }
+  nav.toc.open ol { display: block; }
+  .menu-btn { display: inline-block; margin-top: 8px; font: 13px var(--sans); background: var(--surface); color: var(--text); border: 1px solid var(--rule); border-radius: 4px; padding: 5px 10px; }
+  main { padding: 28px 16px 72px; }
+  h1 { font-size: 30px; }
+  h2 { font-size: 24px; }
+  .two-col { grid-template-columns: 1fr; }
+  td code { white-space: normal; }
+}
+@media print {
+  nav.toc, .theme-toggle { display: none; }
+  .layout { display: block; }
+  main { padding: 0; }
+  section { break-inside: auto; }
+  pre, figure, .callout { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc" id="toc" aria-label="Table of contents">
+  <p class="brand">M17export</p>
+  <p class="brand-sub">Operator Manual</p>
+  <button class="menu-btn" type="button" onclick="document.getElementById('toc').classList.toggle('open')">Contents</button>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#architecture">Architecture</a>
+      <ol>
+        <li><a href="#roles">Node roles</a></li>
+        <li><a href="#glossary">Glossary</a></li>
+      </ol>
+    </li>
+    <li><a href="#status">Implementation status</a></li>
+    <li><a href="#layout">Repository layout</a></li>
+    <li><a href="#prereqs">Prerequisites</a></li>
+    <li><a href="#quickstart">Getting started</a>
+      <ol>
+        <li><a href="#path-a">Path A: prebuilt image</a></li>
+        <li><a href="#path-b">Path B: build from source</a></li>
+        <li><a href="#verify">Verifying it works</a></li>
+      </ol>
+    </li>
+    <li><a href="#config">Configuration reference</a></li>
+    <li><a href="#networking">Networking and firewall</a></li>
+    <li><a href="#mdns">mDNS discovery</a>
+      <ol>
+        <li><a href="#mdns-why">Why mDNS</a></li>
+        <li><a href="#mdns-how">How it works</a></li>
+        <li><a href="#mdns-records">The _m17._udp records</a></li>
+        <li><a href="#mdns-txt">TXT schema</a></li>
+        <li><a href="#mdns-container">Advertiser in the container</a></li>
+        <li><a href="#mdns-standalone">Standalone advertiser</a></li>
+        <li><a href="#mdns-support">Support-network patterns</a></li>
+        <li><a href="#mdns-netreq">Network requirements</a></li>
+        <li><a href="#mdns-test">Testing discovery</a></li>
+        <li><a href="#mdns-clients">For app developers</a></li>
+        <li><a href="#mdns-security">Security notes</a></li>
+      </ol>
+    </li>
+    <li><a href="#interlink">Interlinking and relay</a>
+      <ol>
+        <li><a href="#interlink-udp">UDP interlink</a></li>
+        <li><a href="#interlink-tls">TLS relay: field to hub</a></li>
+        <li><a href="#tls-setup">TLS setup, step by step</a></li>
+      </ol>
+    </li>
+    <li><a href="#building">Building images</a>
+      <ol>
+        <li><a href="#derive">Customizing the published image</a></li>
+        <li><a href="#from-source">Building from source</a></li>
+      </ol>
+    </li>
+    <li><a href="#operations">Operations</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+    <li><a href="#appendix">Appendix</a></li>
+  </ol>
+  <button class="theme-toggle" type="button" id="themeBtn">Toggle light/dark</button>
+</nav>
+
+<main>
+
+<header class="doc-head">
+  <p class="kicker">Operator Manual · M17 Digital Voice</p>
+  <h1>M17export: Field-to-Hub M17 Reflectors</h1>
+  <p class="lede">A containerized fork of the <code>mrefd</code> M17 reflector. Small field nodes run on local support networks, advertise themselves over mDNS, and relay into hub instances of the same software that connect them to the wider M17 network.</p>
+  <div class="doc-meta">
+    <span>Repository: <a href="https://github.com/greggwon/M17export">github.com/greggwon/M17export</a></span>
+    <span>Reflector fork: <a href="https://github.com/greggwon/mrefd">github.com/greggwon/mrefd</a></span>
+    <span>Upstream: <a href="https://github.com/n7tae/mrefd">n7tae/mrefd</a></span>
+  </div>
+</header>
+
+<!-- ================================================================ -->
+<section id="overview">
+<h2><span class="num">1</span>Overview</h2>
+
+<p><strong>M17</strong> is an open digital-voice protocol for amateur radio. Unlike DMR, D-STAR, and YSF, it uses no patent-encumbered codec. Radios and hotspots connect to <strong>reflectors</strong>, which are servers that rebroadcast each transmission to everyone on the same <em>module</em> (a lettered room, A–Z). Reflectors can be <strong>interlinked</strong> so a module on one reflector is shared with a module on another.</p>
+
+<p>This project is made of three pieces that work together:</p>
+<ol>
+  <li><strong>A fork of <code>mrefd</code></strong> (the reference M17 reflector by N7TAE), maintained at <code>greggwon/mrefd</code>. The fork adds an authenticated <strong>TLS interlink</strong>, so a reflector with no fixed IP address (a field node) can relay into another instance of itself (a hub) that has a stable public address and wider connectivity.</li>
+  <li><strong>Container packaging</strong> that reduces deploying a reflector to filling in one environment file and running one command. It builds for <code>arm64</code>, <code>armv7</code>, and <code>amd64</code>, so the same deployment runs on a Raspberry Pi in a go-kit or on a cloud VPS.</li>
+  <li><strong><code>m17-advertise</code></strong>, a small Go program that announces a reflector on the local network over <strong>Bonjour / mDNS</strong>. M17 apps on the same network (such as MSeven) find it automatically, with no addresses to type.</li>
+</ol>
+
+<p>The intended deployment is a <strong>hub-and-spoke</strong> network. Hubs are long-lived, publicly reachable reflectors. Field nodes come up wherever they are needed: an EOC, a shelter, a Field Day site, a club meeting. Each field node serves local users over the site LAN, finds its hub on its own, and carries traffic through it to the rest of the M17 world.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="architecture">
+<h2><span class="num">2</span>Architecture</h2>
+
+<figure>
+<svg viewBox="0 0 900 430" role="img" aria-labelledby="topoTitle">
+  <title id="topoTitle">Field nodes on local networks relay over TLS to a hub, which interlinks with the wider M17 network</title>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="svg-arrowhead"/></marker>
+    <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="svg-arrowhead-a"/></marker>
+  </defs>
+  <!-- local network zone A -->
+  <rect x="20" y="20" width="320" height="180" rx="10" class="svg-zone"/>
+  <text x="36" y="44" class="svg-tm">Site LAN: EOC / shelter (no fixed IP)</text>
+  <rect x="40" y="60" width="100" height="40" rx="6" class="svg-box"/>
+  <text x="90" y="85" text-anchor="middle" class="svg-t">MSeven app</text>
+  <rect x="40" y="130" width="100" height="40" rx="6" class="svg-box"/>
+  <text x="90" y="155" text-anchor="middle" class="svg-t">Hotspot</text>
+  <rect x="190" y="82" width="135" height="60" rx="6" class="svg-accent"/>
+  <text x="257" y="106" text-anchor="middle" class="svg-tb">Field node</text>
+  <text x="257" y="124" text-anchor="middle" class="svg-tm">mrefd + advertiser</text>
+  <path d="M188,95 L142,82" class="svg-dash" marker-end="url(#aha)"/>
+  <path d="M188,130 L142,148" class="svg-line" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <text x="150" y="72" class="svg-tm">mDNS</text>
+  <text x="40" y="190" class="svg-tm">UDP 17000 (M17) to local clients</text>
+
+  <!-- local network zone B -->
+  <rect x="20" y="230" width="320" height="180" rx="10" class="svg-zone"/>
+  <text x="36" y="254" class="svg-tm">Site LAN: Field Day / event Wi-Fi</text>
+  <rect x="40" y="270" width="100" height="40" rx="6" class="svg-box"/>
+  <text x="90" y="295" text-anchor="middle" class="svg-t">MSeven app</text>
+  <rect x="40" y="340" width="100" height="40" rx="6" class="svg-box"/>
+  <text x="90" y="365" text-anchor="middle" class="svg-t">MSeven app</text>
+  <rect x="190" y="292" width="135" height="60" rx="6" class="svg-accent"/>
+  <text x="257" y="316" text-anchor="middle" class="svg-tb">Field node</text>
+  <text x="257" y="334" text-anchor="middle" class="svg-tm">mrefd + advertiser</text>
+  <path d="M188,305 L142,292" class="svg-dash" marker-end="url(#aha)"/>
+  <path d="M188,340 L142,358" class="svg-dash" marker-end="url(#aha)"/>
+
+  <!-- hub -->
+  <rect x="440" y="170" width="170" height="80" rx="8" class="svg-accent"/>
+  <text x="525" y="202" text-anchor="middle" class="svg-tb">Hub node</text>
+  <text x="525" y="220" text-anchor="middle" class="svg-tm">mrefd fork, public IP</text>
+  <text x="525" y="236" text-anchor="middle" class="svg-tm">TLS listener TCP 17000</text>
+  <path d="M325,112 C390,112 400,190 438,195" class="svg-strong" marker-end="url(#aha)"/>
+  <path d="M325,322 C390,322 400,230 438,225" class="svg-strong" marker-end="url(#aha)"/>
+  <text x="352" y="196" class="svg-t">TLS / TCP</text>
+  <text x="352" y="212" class="svg-tm">field dials out</text>
+
+  <!-- wider network -->
+  <rect x="690" y="40" width="190" height="350" rx="10" class="svg-zone"/>
+  <text x="706" y="64" class="svg-tm">Wider M17 network</text>
+  <rect x="710" y="80" width="150" height="44" rx="6" class="svg-box"/>
+  <text x="785" y="107" text-anchor="middle" class="svg-t">Other mrefd</text>
+  <rect x="710" y="150" width="150" height="44" rx="6" class="svg-box"/>
+  <text x="785" y="170" text-anchor="middle" class="svg-t">URFD gateway</text>
+  <text x="785" y="186" text-anchor="middle" class="svg-tm">DMR / D-STAR / YSF</text>
+  <rect x="710" y="220" width="150" height="44" rx="6" class="svg-box"/>
+  <text x="785" y="247" text-anchor="middle" class="svg-t">Ham-DHT</text>
+  <rect x="710" y="290" width="150" height="44" rx="6" class="svg-box"/>
+  <text x="785" y="317" text-anchor="middle" class="svg-t">dvref.com listing</text>
+  <path d="M612,185 L708,104" class="svg-line" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <path d="M612,200 L708,172" class="svg-line" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <path d="M612,220 L708,242" class="svg-line" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  <path d="M612,240 L708,310" class="svg-line" marker-end="url(#ah)"/>
+  <text x="560" y="130" class="svg-tm">UDP interlink, DHT</text>
+</svg>
+<figcaption>Figure 1. Field nodes serve local users and announce themselves over mDNS. Each one dials out to a hub over TLS. The hub has a public address and joins the wider M17 network through ordinary UDP interlinks and Ham-DHT.</figcaption>
+</figure>
+
+<h3 id="roles">Node roles</h3>
+<p>Every node runs the same container image. Its role depends only on configuration.</p>
+
+<div class="two-col">
+  <div class="card">
+    <h4>Hub node ("home")</h4>
+    <ul>
+      <li>Always on, with a stable public IPv4 and/or IPv6 address (VPS, club server, home Pi with port forwarding).</li>
+      <li>Runs a <strong>TLS listener</strong> on TCP 17000 and accepts field nodes whose certificates it has registered.</li>
+      <li>Usually published on Ham-DHT and listed on dvref.com, and interlinked over UDP to other reflectors.</li>
+      <li>Holds <code>server.crt</code>/<code>server.key</code>, plus one <code>peers/&lt;IDENTITY&gt;.pub.pem</code> for each field node.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Field node</h4>
+    <ul>
+      <li>Portable: Raspberry Pi, NUC, or laptop. Its IP changes from site to site, and it is often behind CGNAT, LTE, Starlink, or hotel Wi-Fi.</li>
+      <li><strong>Dials out</strong> to the hub over TLS, so no inbound ports are needed from the internet.</li>
+      <li>Announces itself on the site LAN with <strong>mDNS</strong>, so local apps find it without configuration.</li>
+      <li>Holds <code>client.crt</code>/<code>client.key</code> and a pinned copy of the hub's cert (<code>home.pem</code>).</li>
+    </ul>
+  </div>
+</div>
+
+<p>A node can also stand alone: a plain public reflector, or an isolated local reflector with no uplink at all. An isolated field node is still useful. During an outage it gives everyone on the site network a shared voice channel, and mDNS still lets them find it.</p>
+
+<h3 id="glossary">Glossary</h3>
+<dl class="gloss">
+  <dt>Reflector</dt><dd>A server that rebroadcasts M17 voice and data among connected clients. Identified by a callsign of the form <code>M17-XYZ</code>.</dd>
+  <dt>Module</dt><dd>A lettered channel (A–Z) on a reflector. Clients connect to one module. Each enabled module uses its own processing thread.</dd>
+  <dt>Interlink</dt><dd>A peering between two reflectors that shares one or more modules. Both sides must configure it.</dd>
+  <dt>Ham-DHT</dt><dd>A distributed hash table (built on OpenDHT) where reflectors publish their addresses and metadata, so peers can find each other by callsign instead of by IP.</dd>
+  <dt>dvref.com</dt><dd>The community directory of M17 reflectors and interlink gateways.</dd>
+  <dt>mDNS / DNS-SD / Bonjour</dt><dd>Multicast DNS (RFC 6762) and DNS-Based Service Discovery (RFC 6763). Devices on one local network announce and discover services without a DNS server. Bonjour is Apple's name for it; Avahi is the Linux implementation.</dd>
+  <dt>MSeven</dt><dd>An Apple-native (iOS/macOS) M17 client. It reads the <code>_m17._udp</code> advertisements and the <code>sites.json</code> reflector directory.</dd>
+  <dt>Identity (TLS)</dt><dd>A field node's TLS name in the form <code>CALLSIGN-MODULE</code>, for example <code>W5GGW-B</code>. One operator can run several field nodes at once by giving each a different module.</dd>
+</dl>
+</section>
+
+<!-- ================================================================ -->
+<section id="status">
+<h2><span class="num">3</span>Implementation status</h2>
+<div class="callout status">
+  <span class="label">Read this first</span>
+  <p>The pieces of this project are at different stages. Check this table before planning a deployment.</p>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Component</th><th>State</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td>Container packaging, wizard, compose files</td><td>Working</td><td>this repo, <code>main</code></td></tr>
+    <tr><td>Standalone reflector (UDP clients, UDP interlinks, Ham-DHT, dashboard)</td><td>Working</td><td>this repo + pinned <code>mrefd</code> submodule</td></tr>
+    <tr><td>mDNS advertiser <code>m17-advertise</code></td><td>Working, built into the image</td><td><code>tools/m17-advertise/</code></td></tr>
+    <tr><td>Last-heard list overflow fix (<code>users.cpp</code>)</td><td>Applied at build time; upstream PR open</td><td><code>docker/mrefd/Dockerfile</code></td></tr>
+    <tr><td>TLS interlink (field → hub relay)</td><td>Implemented in the fork, being integrated</td><td><code>greggwon/mrefd</code> branch <code>w5ggw</code> (commit <code>b7054c0</code>)</td></tr>
+    <tr><td>TLS certificate helper scripts</td><td>Present</td><td><code>scripts/tls-*.sh</code></td></tr>
+    <tr><td>TLS settings in <code>mrefd.cfg</code></td><td>Not yet. TLS is configured through <code>MREFD_TLS_*</code> environment variables, which the fork reads directly.</td><td><code>reflector.cpp</code> on <code>w5ggw</code></td></tr>
+  </tbody>
+</table></div>
+<div class="callout warn">
+  <span class="label">Submodule pin</span>
+  <p>The <code>mrefd</code> submodule in this repo is currently pinned to commit <code>a535143</code> on the fork's <code>tls-interlink</code> branch. That commit <strong>does not include the TLS interlink code</strong>. To build a TLS-capable image, follow <a href="#tls-build">Building with TLS support</a>. A plain build without it gives you a fully working UDP/DHT reflector with mDNS advertising.</p>
+</div>
+</section>
+
+<!-- ================================================================ -->
+<section id="layout">
+<h2><span class="num">4</span>Repository layout</h2>
+<pre><code>M17export/
+├── Makefile                     <span class="c"># build/run wrapper — `make help`</span>
+├── docker-compose.yml           <span class="c"># source-build deployment: mrefd (host net) + optional dashboard</span>
+├── docker-compose.bridge.yml    <span class="c"># overlay: bridge networking (Docker Desktop, restricted hosts)</span>
+├── .env.example                 <span class="c"># every setting, documented — copied to .env by `make init`</span>
+├── config/                      <span class="c"># live-editable whitelist / blacklist / interlink (gitignored)</span>
+├── deploy/                      <span class="c"># self-contained "pull the image and run" bundle</span>
+│   ├── README.md  BUILD.md  CERTS.md  INTERLINK-CHOICES.md
+│   ├── docker-compose.yml       <span class="c"># pulls ghcr.io/greggwon/mrefd, mounts config/tls</span>
+│   ├── mrefd.env.example
+│   └── config/                  <span class="c"># mrefd.whitelist, mrefd.blacklist, mrefd.interlink, tls/</span>
+├── docker/
+│   ├── mrefd/Dockerfile         <span class="c"># 3-stage: build mrefd, build m17-advertise, slim runtime</span>
+│   ├── mrefd/entrypoint.sh      <span class="c"># renders mrefd.cfg from env, starts mrefd + advertiser</span>
+│   └── dashboard/               <span class="c"># lighttpd + php-fpm serving the upstream PHP dashboard</span>
+├── docs/
+│   ├── index.html               <span class="c"># this manual</span>
+│   └── tls-interlink-design.md  <span class="c"># TLS wire protocol and design</span>
+├── scripts/
+│   ├── init.sh                  <span class="c"># interactive setup wizard (`make init`)</span>
+│   └── tls-*.sh                 <span class="c"># genkey, add/remove/list peers, rotate, verify</span>
+├── tools/m17-advertise/         <span class="c"># Go source for the mDNS advertiser</span>
+└── mrefd/                       <span class="c"># git submodule → github.com/greggwon/mrefd</span></code></pre>
+<p>There are two ways to deploy, and each has its own compose file:</p>
+<ul>
+  <li><strong><code>deploy/</code></strong> is the operator bundle. It pulls a prebuilt image from GitHub Container Registry, so no build tools or source tree are needed. Its compose file also mounts <code>config/tls/</code> for certificates. Use this for most field and hub nodes.</li>
+  <li><strong>Repository root</strong> is the developer path. It builds images from the submodule source, adds the optional web dashboard, and provides the <code>make</code> targets.</li>
+</ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="prereqs">
+<h2><span class="num">5</span>Prerequisites</h2>
+<h3>Deployment host</h3>
+<ul>
+  <li><strong>Linux</strong>: Raspberry Pi OS 64-bit, Debian 12, Ubuntu 22.04 or newer, or any distribution with a current Docker Engine. Host networking and LAN mDNS work only on a Linux kernel. See <a href="#networking">Networking</a> for macOS caveats.</li>
+  <li><strong>Hardware</strong>: a Raspberry Pi 3 or newer is enough for a field node with a few modules. A hub with many interlinks is better on a Pi 4/5 or a small VPS.</li>
+  <li><strong>Docker Engine with Compose v2</strong>:</li>
+</ul>
+<pre><code>curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"
+newgrp docker            <span class="c"># or log out and back in</span>
+sudo apt-get install -y git make</code></pre>
+
+<h3>Additional tools for building from source</h3>
+<ul>
+  <li>Docker <code>buildx</code> (included in current Docker Engine and Docker Desktop). QEMU emulation for cross-arch builds is installed automatically on first use.</li>
+  <li><strong>Go 1.25 or newer</strong>, only if you want to run <code>m17-advertise</code> outside the container (for example, on a Mac). On macOS: <code>brew install go</code>.</li>
+  <li><code>openssl</code>, for the TLS certificate scripts. It is preinstalled on Linux and macOS.</li>
+</ul>
+
+<h3>Before you go on the air</h3>
+<ul>
+  <li>Choose a reflector callsign <code>M17-XYZ</code> (three characters, A–Z or 0–9) that is <strong>not already listed</strong> at <a href="https://dvref.com">dvref.com</a>. A field node that stays private behind its hub still needs a callsign that is unique inside your own network.</li>
+  <li>Decide which modules you will use, and give each one a purpose. For example: A = international, B = regional, C = local net, D = ARES tactical.</li>
+</ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="quickstart">
+<h2><span class="num">6</span>Getting started</h2>
+
+<h3 id="path-a">Path A: deploy a prebuilt image (recommended)</h3>
+<p>The published image <code>ghcr.io/greggwon/mrefd:latest</code> is public and covers <code>linux/amd64</code>, <code>linux/arm64</code>, <code>linux/arm/v7</code>, and <code>linux/386</code>. Docker pulls the right variant automatically, including for a Pi 3 or Zero 2W running 32-bit Raspberry Pi OS. The 64-bit OS is still the better choice on hardware that supports it.</p>
+<ol class="steps">
+  <li><strong>Get the deployment bundle.</strong>
+<pre><code>git clone https://github.com/greggwon/M17export.git
+cd M17export/deploy</code></pre>
+  You can also copy only the <code>deploy/</code> directory to the target machine.</li>
+
+  <li><strong>Create your configuration.</strong>
+<pre><code>cp mrefd.env.example mrefd.env
+nano mrefd.env</code></pre>
+  At a minimum, set the five required values:
+<pre><code>MREFD_CALLSIGN=M17-XYZ
+MREFD_MODULES=BCD
+MREFD_COUNTRY=US
+MREFD_EMAIL=you@example.net
+MREFD_DASHBOARD_URL=https://reflector.example.net</code></pre>
+  If this reflector should be easy to recognize on a local network, also set <code>MREFD_ADVERTISE_NAME</code> (see <a href="#mdns">mDNS discovery</a>).</li>
+
+  <li><strong>Check the list files.</strong> <code>config/mrefd.whitelist</code>, <code>config/mrefd.blacklist</code>, and <code>config/mrefd.interlink</code> must exist as <em>files</em>. If they are missing, Docker creates directories in their place and mrefd fails to start.
+<pre><code>ls -l config/
+touch config/mrefd.whitelist config/mrefd.blacklist config/mrefd.interlink</code></pre></li>
+
+  <li><strong>Start the reflector.</strong>
+<pre><code>docker compose up -d
+docker compose logs -f</code></pre></li>
+
+  <li><strong>Open the firewall</strong> for the ports in <a href="#ports">Ports</a>: UDP 17000 for clients, UDP 17171 for DHT, and TCP 17000 on hubs that accept TLS field nodes.</li>
+</ol>
+
+<h3 id="path-b">Path B: build from source</h3>
+<ol class="steps">
+  <li><strong>Clone with submodules.</strong>
+<pre><code>git clone --recurse-submodules https://github.com/greggwon/M17export.git
+cd M17export
+<span class="c"># if you already cloned without them:</span>
+git submodule update --init --recursive</code></pre></li>
+
+  <li><strong>Run the setup wizard.</strong> It asks for callsign, modules, country, email, dashboard URL, sponsor, DHT, and ports. It then writes <code>.env</code> from <code>.env.example</code>, keeping all the comments, and seeds <code>config/</code> with the upstream list-file templates.
+<pre><code>make init</code></pre></li>
+
+  <li><strong>Build the images</strong> for the machine you are on. This builds both the reflector and the dashboard image.
+<pre><code>make build-local</code></pre>
+  On a Raspberry Pi 3 the first build takes a while, because the C++ build stage compiles mrefd from source.</li>
+
+  <li><strong>Start the services.</strong>
+<pre><code>make up               <span class="c"># reflector only (headless)</span>
+make up-dashboard     <span class="c"># reflector + web dashboard on http://&lt;host&gt;:8080/</span>
+make logs-mrefd       <span class="c"># follow reflector logs</span></code></pre></li>
+</ol>
+
+<h3 id="verify">Verifying it works</h3>
+<p>A healthy start shows lines like these in the log:</p>
+<pre><code>entrypoint: starting mrefd as M17-XYZ on modules BCD, UDP 17000
+Reflector M17-XYZ started and listening
+PutDHTConfig() successful
+entrypoint: starting Bonjour advertiser for m17-xyz
+m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
+  TXT: type=reflector
+  TXT: designator=XYZ
+  ...</code></pre>
+<p>Then check each layer:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Check</th><th>Command</th><th>Expected</th></tr></thead>
+  <tbody>
+    <tr><td>Container up</td><td><code>docker compose ps</code></td><td><code>mrefd</code> is <em>running</em></td></tr>
+    <tr><td>Listening sockets</td><td><code>sudo ss -ulpn | grep 17000</code></td><td>UDP <code>0.0.0.0:17000</code> and <code>[::]:17000</code></td></tr>
+    <tr><td>LAN discovery</td><td><code>avahi-browse -rt _m17._udp</code> (Linux)<br><code>dns-sd -B _m17._udp</code> (macOS)</td><td>Your instance name, e.g. <code>m17-xyz</code></td></tr>
+    <tr><td>Client connect</td><td>Connect MSeven or a hotspot to <code>M17-XYZ</code>, module B</td><td>Client appears on the dashboard and in the log</td></tr>
+    <tr><td>DHT</td><td>Search dvref.com or another reflector's peers page</td><td>Your callsign resolves (allow several minutes)</td></tr>
+  </tbody>
+</table></div>
+</section>
+
+<!-- ================================================================ -->
+<section id="config">
+<h2><span class="num">7</span>Configuration reference</h2>
+<p>All settings are environment variables. Put them in <code>.env</code> (source build) or <code>deploy/mrefd.env</code> (prebuilt). Each time the container starts, <code>docker/mrefd/entrypoint.sh</code> checks the required values, renders <code>/etc/mrefd/mrefd.cfg</code>, and refuses to start if a value is a placeholder or malformed. After changing a value, apply it with <code>make restart</code> or <code>docker compose up -d</code>.</p>
+
+<h3>Identity (required)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Example</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_CALLSIGN</code></td><td><code>M17-XYZ</code></td><td>Reflector callsign. Must match <code>^M17-[A-Z0-9]{3}$</code>.</td></tr>
+<tr><td><code>MREFD_MODULES</code></td><td><code>BCD</code></td><td>Enabled modules: uppercase letters, no separators.</td></tr>
+<tr><td><code>MREFD_COUNTRY</code></td><td><code>US</code></td><td>ISO 3166-1 alpha-2 country code.</td></tr>
+<tr><td><code>MREFD_EMAIL</code></td><td><code>ops@club.org</code></td><td>Admin contact, published on Ham-DHT.</td></tr>
+<tr><td><code>MREFD_DASHBOARD_URL</code></td><td><code>https://m17.club.org</code></td><td>Public dashboard URL, published on Ham-DHT and in the mDNS TXT record.</td></tr>
+<tr><td><code>MREFD_SPONSOR</code></td><td><code>Tulsa ARC</code></td><td>Optional sponsoring club. Must not contain <code>=</code>.</td></tr>
+</tbody></table></div>
+
+<h3>Encryption</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td><em>blank</em></td><td>Modules that allow encrypted streams. Blank means encryption is refused on every module.</td></tr>
+<tr><td><code>MREFD_LISTEN_ONLY_ALLOW_ENCRYPT</code></td><td><code>false</code></td><td>Allow listen-only clients on encryption-enabled modules.</td></tr>
+</tbody></table></div>
+<div class="callout warn"><span class="label">Regulatory</span><p>Most amateur radio services prohibit encrypted transmissions. Know your local rules before enabling this. Interlinked peers must also agree on encryption for each shared module, or streams are silently dropped.</p></div>
+
+<h3>Network binding</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_PORT</code></td><td><code>17000</code></td><td>UDP port mrefd binds. TLS uses the same number on TCP unless overridden.</td></tr>
+<tr><td><code>MREFD_IPV4_BIND</code></td><td><code>0.0.0.0</code></td><td>IPv4 bind address. Blank makes the reflector IPv6-only.</td></tr>
+<tr><td><code>MREFD_IPV6_BIND</code></td><td><code>::</code></td><td>IPv6 bind address. Blank makes the reflector IPv4-only.</td></tr>
+<tr><td><code>MREFD_IPV4_EXT</code> / <code>MREFD_IPV6_EXT</code></td><td><em>auto</em></td><td>Public addresses published to DHT (and to mDNS, if set). Leave blank to auto-detect. Set them in bridge mode or behind unusual NAT.</td></tr>
+<tr><td><code>M17_PORT</code>, <code>DHT_PORT</code>, <code>DASHBOARD_PORT</code></td><td>17000, 17171, 8080</td><td>Host-side ports (source-build compose). In host networking they are reminders for your firewall rules. In bridge mode they are the actual published ports.</td></tr>
+</tbody></table></div>
+
+<h3>Ham-DHT</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_DHT_ENABLED</code></td><td><code>true</code></td><td>Publish to and discover peers on Ham-DHT. Hubs should enable it. Private field nodes may disable it.</td></tr>
+<tr><td><code>MREFD_BOOTSTRAP</code></td><td><code>xrf757.openquad.net</code></td><td>DHT bootstrap node.</td></tr>
+<tr><td><code>MREFD_BUILD_DHT</code></td><td><code>true</code></td><td>Build-time: compile DHT support. Keep it matched to <code>MREFD_DHT_ENABLED</code>.</td></tr>
+<tr><td><code>MREFD_BUILD_DEBUG</code></td><td><code>false</code></td><td>Build-time: debug symbols and verbose packet dumps.</td></tr>
+</tbody></table></div>
+
+<h3>mDNS advertiser</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_ADVERTISE_ENABLED</code></td><td><code>true</code></td><td>Run <code>m17-advertise</code> inside the container. Set to <code>false</code> on Docker Desktop.</td></tr>
+<tr><td><code>MREFD_ADVERTISE_NAME</code></td><td><em>blank</em></td><td>Human-readable name shown by apps, e.g. <code>Tulsa EOC Field Node</code>.</td></tr>
+<tr><td><code>MREFD_ADVERTISE_DESCRIPTION</code></td><td><em>blank</em></td><td>Free-text description (HTML permitted).</td></tr>
+<tr><td><code>MREFD_ADVERTISE_NETWORK_TYPE</code></td><td><em>blank</em></td><td><code>hosting</code>, <code>business</code>, or <code>residential</code>.</td></tr>
+<tr><td><code>MREFD_ADVERTISE_CONFIG</code></td><td><code>/etc/mrefd/site.json</code></td><td>Container path to a JSON <code>reflectors[]</code> entry used as the base record. Used only if the file exists (bind-mount it in).</td></tr>
+</tbody></table></div>
+
+<h3>TLS interlink</h3>
+<p>The TLS-capable build of the fork reads these variables directly at startup. They are not rendered into <code>mrefd.cfg</code>. The TLS layer activates only when <code>mrefd.interlink</code> contains a <code>key:</code> or <code>tls:</code> entry.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Used on</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_TLS_SERVER_CERT</code> / <code>_KEY</code></td><td>Hub</td><td>PEM cert and key presented to incoming field nodes.</td></tr>
+<tr><td><code>MREFD_TLS_CLIENT_CERT</code> / <code>_KEY</code></td><td>Field</td><td>PEM cert and key presented when dialing a hub. They also sign the BIRTH message.</td></tr>
+<tr><td><code>MREFD_TLS_PORT</code></td><td>Hub</td><td>TCP listen port. Defaults to <code>MREFD_PORT</code>.</td></tr>
+<tr><td><code>MREFD_TLS_BIND_ADDR</code></td><td>Hub</td><td>Listener bind address. Defaults to <code>MREFD_IPV6_BIND</code>, then <code>0.0.0.0</code>.</td></tr>
+<tr><td><code>MREFD_TLS_TIMESTAMP_SKEW</code></td><td>Hub</td><td>Allowed clock difference for BIRTH timestamps, in seconds. Default 300. Field nodes need roughly correct clocks: use NTP, or GPS time when offline.</td></tr>
+</tbody></table></div>
+
+<h3>Dashboard (source build, optional)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>DASHBOARD_IPV4</code> / <code>DASHBOARD_IPV6</code></td><td>Addresses shown on the landing page. Blank auto-detects. <code>NONE</code> hides IPv6.</td></tr>
+<tr><td><code>DASHBOARD_TZ</code></td><td>tz database name, e.g. <code>America/Chicago</code>.</td></tr>
+<tr><td><code>DASHBOARD_IP_MODE</code></td><td><code>HideIP</code>, <code>ShowFullIP</code>, <code>ShowLast1ByteOfIP</code>, <code>ShowLast2ByteOfIP</code>, <code>ShowLast3ByteOfIP</code>.</td></tr>
+<tr><td><code>DASHBOARD_MODULE_&lt;X&gt;</code></td><td>Friendly name for module letter <code>X</code>.</td></tr>
+</tbody></table></div>
+
+<h3>Live-editable list files</h3>
+<p><code>mrefd.whitelist</code>, <code>mrefd.blacklist</code>, and <code>mrefd.interlink</code> are bind-mounted from the host <code>config/</code> directory. mrefd watches them and applies edits within seconds, <strong>without a restart</strong>. Each upstream template documents its syntax in comments at the top.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="networking">
+<h2><span class="num">8</span>Networking and firewall</h2>
+<h3>Host networking (the default)</h3>
+<p>The <code>mrefd</code> service uses <code>network_mode: host</code>. On Linux this gives you four things:</p>
+<ul>
+  <li>mrefd binds directly to the host's real IPv4 and IPv6 addresses, with no NAT in between.</li>
+  <li>Ham-DHT detects and publishes your true external addresses without manual overrides.</li>
+  <li>IPv6 works natively. This matters for hosts behind residential CGNAT that have no usable inbound IPv4.</li>
+  <li>The advertiser's mDNS multicast reaches the physical LAN directly. <strong>This is required for local discovery.</strong></li>
+</ul>
+
+<h3>Bridge mode</h3>
+<p>Some environments forbid host networking, and Docker Desktop on macOS and Windows silently ignores it. For those, add the bridge overlay:</p>
+<pre><code>docker compose -f docker-compose.yml -f docker-compose.bridge.yml --profile dashboard up -d</code></pre>
+<p>In bridge mode, set <code>MREFD_IPV4_EXT</code>/<code>MREFD_IPV6_EXT</code> so DHT does not publish the container's private address. Add <code>"ipv6": true</code> to <code>/etc/docker/daemon.json</code> if you need IPv6. The overlay deliberately publishes UDP on IPv4 only, to work around a Docker Desktop dual-stack UDP bug. It does <strong>not</strong> publish UDP 5353, so mDNS from inside the container cannot reach the LAN in this mode. See <a href="#mdns-standalone">Standalone advertiser</a> for the workaround.</p>
+
+<h3 id="ports">Ports</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Purpose</th><th>Proto</th><th>Port</th><th>Scope</th><th>Needed on</th></tr></thead>
+<tbody>
+<tr><td>M17 clients and UDP interlinks</td><td>UDP</td><td>17000</td><td>Inbound from internet / LAN</td><td>All nodes. Field nodes need it on the LAN only.</td></tr>
+<tr><td>TLS interlink</td><td>TCP</td><td>17000</td><td>Inbound from internet</td><td>Hubs only. Field nodes only dial out.</td></tr>
+<tr><td>Ham-DHT</td><td>UDP</td><td>17171</td><td>Inbound from internet</td><td>Nodes with DHT enabled</td></tr>
+<tr><td>mDNS / Bonjour</td><td>UDP</td><td>5353</td><td>LAN multicast only</td><td>Nodes that advertise. Allow it in the host firewall; never forward it on the router.</td></tr>
+<tr><td>Dashboard</td><td>TCP</td><td>8080</td><td>Inbound</td><td>Optional</td></tr>
+</tbody></table></div>
+<p>Example rules for <code>ufw</code> on a hub:</p>
+<pre><code>sudo ufw allow 17000/udp
+sudo ufw allow 17000/tcp
+sudo ufw allow 17171/udp
+sudo ufw allow in on eth0 to 224.0.0.251 port 5353 proto udp   <span class="c"># mDNS, LAN side</span></code></pre>
+<p>Open the same ports for IPv6 on any host that has it. Cloud providers (AWS Security Groups, etc.) need matching inbound rules.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="mdns">
+<h2><span class="num">9</span>mDNS discovery for local support networks</h2>
+
+<p>A field reflector does no good if the people next to it can't find it. Ham-DHT and dvref.com solve discovery on the internet. A shelter, an EOC, or a Field Day site may have no internet at all, or a link that is slow, metered, or saturated. mDNS covers that gap. <strong>Any reflector on the local network announces itself, and any M17 app on that network finds it within seconds. No one types an IP address, and no DNS server, internet link, or central directory is involved.</strong></p>
+
+<h3 id="mdns-why">Why mDNS fits emergency and event networks</h3>
+<div class="two-col">
+  <div class="card">
+    <h4>Zero infrastructure</h4>
+    <p>mDNS needs only a shared network segment. A travel router, a Pi acting as an access point, or the venue's Wi-Fi is enough. It keeps working when upstream internet is lost.</p>
+  </div>
+  <div class="card">
+    <h4>Zero configuration for users</h4>
+    <p>Volunteers arriving with phones or laptops join the site Wi-Fi, open the app, and the local reflector is already listed. There are no addresses to hand out and no typos to troubleshoot under pressure.</p>
+  </div>
+  <div class="card">
+    <h4>Addresses change; names don't</h4>
+    <p>A field kit gets a different DHCP lease at every site. The announcement always carries the current address, so the app always connects to the right one.</p>
+  </div>
+  <div class="card">
+    <h4>Self-describing</h4>
+    <p>The TXT record carries the callsign, modules, sponsor, name, and description. The app can show "Tulsa EOC Field Node – modules B, C, D" instead of a bare IP address.</p>
+  </div>
+</div>
+<p>mDNS is how the <em>local support network</em> (the club, the ARES group, or the served agency running the site LAN) tells every device on it that an M17 reflector is available here and how to reach it. The same mechanism lets that network point users at reflectors hosted elsewhere. See <a href="#mdns-support">Support-network patterns</a>.</p>
+
+<h3 id="mdns-how">How mDNS and DNS-SD work</h3>
+<p><strong>Multicast DNS</strong> (RFC 6762) uses ordinary DNS messages, sent to a multicast group instead of a server: <code>224.0.0.251</code> for IPv4 and <code>ff02::fb</code> for IPv6, both on UDP port <code>5353</code>. Each device answers for its own names in the <code>.local.</code> domain. These packets are <strong>link-local</strong>: routers do not forward them, so an advertisement reaches exactly the devices on the same network segment.</p>
+<p><strong>DNS-Based Service Discovery</strong> (RFC 6763) builds on mDNS. It defines a standard set of records so that clients can ask "which instances of service type X exist here?" and then "how do I reach this one?". M17 reflectors use the service type <code>_m17._udp</code>.</p>
+
+<figure>
+<svg viewBox="0 0 900 400" role="img" aria-labelledby="seqTitle">
+  <title id="seqTitle">Sequence: advertiser announces, app browses, resolves, and connects</title>
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="svg-arrowhead"/></marker>
+    <marker id="ah2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="svg-arrowhead-a"/></marker>
+  </defs>
+  <rect x="40" y="20" width="200" height="48" rx="6" class="svg-accent"/>
+  <text x="140" y="42" text-anchor="middle" class="svg-tb">Field node</text>
+  <text x="140" y="59" text-anchor="middle" class="svg-tm">mrefd + m17-advertise</text>
+  <rect x="350" y="20" width="200" height="48" rx="6" class="svg-zone"/>
+  <text x="450" y="42" text-anchor="middle" class="svg-tb">LAN multicast group</text>
+  <text x="450" y="59" text-anchor="middle" class="svg-tm">224.0.0.251 / ff02::fb : 5353</text>
+  <rect x="660" y="20" width="200" height="48" rx="6" class="svg-box"/>
+  <text x="760" y="42" text-anchor="middle" class="svg-tb">M17 app</text>
+  <text x="760" y="59" text-anchor="middle" class="svg-tm">e.g. MSeven</text>
+  <line x1="140" y1="68" x2="140" y2="385" class="svg-line" stroke-dasharray="3 4"/>
+  <line x1="450" y1="68" x2="450" y2="385" class="svg-line" stroke-dasharray="3 4"/>
+  <line x1="760" y1="68" x2="760" y2="385" class="svg-line" stroke-dasharray="3 4"/>
+
+  <path d="M140,100 L446,100" class="svg-dash" marker-end="url(#ah2a)"/>
+  <text x="150" y="93" class="svg-t">① Announce: PTR, SRV, TXT, A/AAAA</text>
+
+  <path d="M760,150 L454,150" class="svg-line" marker-end="url(#ah2)"/>
+  <text x="470" y="143" class="svg-t">② Browse: PTR? _m17._udp.local.</text>
+
+  <path d="M140,195 L446,195" class="svg-dash" marker-end="url(#ah2a)"/>
+  <path d="M450,195 L756,195" class="svg-dash" marker-end="url(#ah2a)"/>
+  <text x="150" y="188" class="svg-t">③ Answer: m17-xyz._m17._udp.local.</text>
+
+  <path d="M760,245 L454,245" class="svg-line" marker-end="url(#ah2)"/>
+  <text x="470" y="238" class="svg-t">④ Resolve: SRV? TXT? A? AAAA?</text>
+
+  <path d="M140,290 L446,290" class="svg-dash" marker-end="url(#ah2a)"/>
+  <path d="M450,290 L756,290" class="svg-dash" marker-end="url(#ah2a)"/>
+  <text x="150" y="283" class="svg-t">⑤ host:17000, TXT metadata, 192.168.1.40</text>
+
+  <path d="M760,350 L144,350" class="svg-strong" marker-end="url(#ah2a)"/>
+  <text x="462" y="342" class="svg-t">⑥ M17 connect: UDP 192.168.1.40:17000</text>
+</svg>
+<figcaption>Figure 2. Discovery. The advertiser announces when it starts and answers queries for as long as it runs. Apps browse for <code>_m17._udp</code>, resolve one instance to an address and port, and then connect over normal unicast M17. mDNS is involved only in discovery.</figcaption>
+</figure>
+
+<h3 id="mdns-records">The records behind an <code>_m17._udp</code> advertisement</h3>
+<p>For a reflector <code>M17-XYZ</code> running on a host named <code>fieldpi</code>, the advertiser publishes four related records:</p>
+<pre><code><span class="c">; 1. PTR — "an instance of _m17._udp exists, called m17-xyz"</span>
+_m17._udp.local.                 PTR   m17-xyz._m17._udp.local.
+
+<span class="c">; 2. SRV — "that instance is served by host fieldpi, port 17000"</span>
+m17-xyz._m17._udp.local.         SRV   0 0 17000 fieldpi.local.
+
+<span class="c">; 3. TXT — reflector metadata as key=value strings</span>
+m17-xyz._m17._udp.local.         TXT   "type=reflector" "designator=XYZ" "slug=m17-xyz"
+                                       "name=Tulsa EOC Field Node" "sponsor=Tulsa ARC"
+                                       "country=US" "url=https://m17.club.org"
+                                       "ipv4=192.168.1.40" "port=17000" "modules=BCD"
+
+<span class="c">; 4. A / AAAA — "fieldpi is at these addresses"</span>
+fieldpi.local.                   A     192.168.1.40
+fieldpi.local.                   AAAA  2001:db8:10::40</code></pre>
+<p>The <strong>instance name</strong> defaults to the lowercase callsign (the <em>slug</em>), e.g. <code>m17-xyz</code>. If the slug is empty it falls back to the designator, then to the name. You can override it with <code>--instance-name</code>. The <strong>SRV target</strong> is the system hostname with any trailing <code>.local</code> removed before the domain is added. This prevents the doubled <code>fieldpi.local.local.</code> target that macOS hostnames would otherwise produce. The <strong>A/AAAA</strong> set contains every non-loopback address on the advertising interfaces. IPv6 link-local (<code>fe80::/10</code>) addresses are left out because they are unusable without a zone ID.</p>
+
+<h3 id="mdns-txt">TXT record schema</h3>
+<p>The TXT keys use the same names as entries in the <code>reflectors[]</code> array of MSeven's directory file (<a href="http://mseven.wonderly.org/mseven/sites.json.gz">sites.json</a>). A client can therefore treat a LAN-discovered reflector exactly like one from the internet directory. Keys are emitted in a fixed order, and empty values are omitted.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Key</th><th>Example</th><th>Source in the container</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>type</code></td><td><code>reflector</code></td><td>always</td><td>Record kind. Lets the service type carry other M17 roles later.</td></tr>
+<tr><td><code>designator</code></td><td><code>XYZ</code></td><td><code>MREFD_CALLSIGN</code> without <code>M17-</code></td><td>Reflector short ID.</td></tr>
+<tr><td><code>slug</code></td><td><code>m17-xyz</code></td><td>lowercase <code>MREFD_CALLSIGN</code></td><td>URL-safe ID. Also the default instance name.</td></tr>
+<tr><td><code>name</code></td><td><code>Tulsa EOC Field Node</code></td><td><code>MREFD_ADVERTISE_NAME</code></td><td>Display name.</td></tr>
+<tr><td><code>sponsor</code></td><td><code>Tulsa ARC</code></td><td><code>MREFD_SPONSOR</code></td><td>Sponsoring operator or club.</td></tr>
+<tr><td><code>country</code></td><td><code>US</code></td><td><code>MREFD_COUNTRY</code></td><td>ISO country code.</td></tr>
+<tr><td><code>url</code></td><td><code>https://m17.club.org</code></td><td><code>MREFD_DASHBOARD_URL</code></td><td>Dashboard / info page.</td></tr>
+<tr><td><code>dns</code></td><td><code>m17.club.org</code></td><td>site.json only</td><td>Public DNS name of the reflector.</td></tr>
+<tr><td><code>ipv4</code></td><td><code>192.168.1.40</code></td><td><code>MREFD_IPV4_EXT</code>, else auto-detected</td><td>Address to connect to. If not set, the IPv4 of the default-route interface.</td></tr>
+<tr><td><code>ipv6</code></td><td><code>2001:db8:10::40</code></td><td><code>MREFD_IPV6_EXT</code>, else auto-detected</td><td>As above, for IPv6.</td></tr>
+<tr><td><code>port</code></td><td><code>17000</code></td><td><code>MREFD_PORT</code></td><td>UDP port. Also carried in the SRV record.</td></tr>
+<tr><td><code>modules</code></td><td><code>BCD</code></td><td><code>MREFD_MODULES</code></td><td>Enabled modules, concatenated letters.</td></tr>
+<tr><td><code>encrypted</code></td><td><code>D</code></td><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td>Modules that permit encryption.</td></tr>
+<tr><td><code>network_type</code></td><td><code>residential</code></td><td><code>MREFD_ADVERTISE_NETWORK_TYPE</code></td><td><code>hosting</code> / <code>business</code> / <code>residential</code>.</td></tr>
+<tr><td><code>ip_source</code></td><td><code>static</code></td><td>site.json / <code>--ip-source</code></td><td>How the address was obtained: <code>dns</code> or <code>static</code>.</td></tr>
+<tr><td><code>description</code></td><td><code>Shelter net, 24h</code></td><td><code>MREFD_ADVERTISE_DESCRIPTION</code></td><td>Free text. HTML permitted.</td></tr>
+</tbody></table></div>
+<p><strong>Long values.</strong> A single TXT string may hold at most 255 bytes. When <code>key=value</code> is longer than that, the advertiser splits the value across numbered keys (<code>description0=</code>, <code>description1=</code>, …). Clients rebuild the value by concatenating the numbered keys in order.</p>
+
+<h3 id="mdns-container">The advertiser inside the container</h3>
+<p>The image includes <code>/usr/local/bin/m17-advertise</code>, a static Go binary built from <code>tools/m17-advertise</code> with the <a href="https://github.com/libp2p/zeroconf">libp2p/zeroconf</a> library. On startup, <code>entrypoint.sh</code> does the following:</p>
+<ol>
+  <li>Starts mrefd.</li>
+  <li><strong>Waits 10 seconds</strong>, so the reflector is already bound and accepting connections before any app is told about it.</li>
+  <li>Derives <code>designator</code> and <code>slug</code> from <code>MREFD_CALLSIGN</code>, and converts <code>MREFD_MODULES</code>/<code>MREFD_ENCRYPTION_ALLOWED</code> into the advertiser's comma-separated form.</li>
+  <li>If <code>MREFD_ADVERTISE_CONFIG</code> (default <code>/etc/mrefd/site.json</code>) exists, loads it as the <strong>base</strong> record. Values from environment variables are then <strong>overlaid</strong> on top.</li>
+  <li>Runs <code>m17-advertise</code>. When it receives SIGTERM it sends goodbye packets (TTL 0), so apps drop the entry immediately rather than waiting for it to expire.</li>
+</ol>
+<p>The advertiser is best-effort. If it exits, mrefd keeps running. If mrefd exits, the container stops the advertiser and exits too, so a stopped reflector is never left advertised.</p>
+
+<h4>Adding display fields with environment variables</h4>
+<pre><code>MREFD_ADVERTISE_ENABLED=true
+MREFD_ADVERTISE_NAME=Tulsa EOC Field Node
+MREFD_ADVERTISE_DESCRIPTION=Served-agency net. Module C = shelter traffic, D = logistics.
+MREFD_ADVERTISE_NETWORK_TYPE=residential</code></pre>
+
+<h4>Supplying a full record with site.json</h4>
+<p>Some fields (<code>dns</code>, <code>ip_source</code>) have no environment variable. You may also prefer to keep one canonical record that matches your entry in the public directory. In either case, write a single <code>reflectors[]</code> entry:</p>
+<pre><code>{
+  "designator": "XYZ",
+  "name": "Tulsa EOC Field Node",
+  "slug": "m17-xyz",
+  "url": "https://m17.club.org",
+  "dns": "m17.club.org",
+  "port": 17000,
+  "sponsor": "Tulsa ARC",
+  "country": "US",
+  "description": "Served-agency net.",
+  "modules": ["B", "C", "D"],
+  "network_type": "residential",
+  "ip_source": "dns"
+}</code></pre>
+<p>Then mount it into the container by adding a line to the <code>volumes:</code> list of the <code>mrefd</code> service:</p>
+<pre><code>      - ./config/site.json:/etc/mrefd/site.json:ro</code></pre>
+
+<h3 id="mdns-standalone">Running the advertiser standalone</h3>
+<p><code>m17-advertise</code> has no dependency on mrefd. It can advertise <em>any</em> M17 reflector (mrefd, URFD, or another implementation) from any machine on the LAN. You need this on Docker Desktop for macOS/Windows, where multicast cannot leave the Docker VM and the host already owns UDP 5353.</p>
+<pre><code>cd tools/m17-advertise
+go build -o m17-advertise .
+
+<span class="c"># Preview the exact records without publishing</span>
+./m17-advertise --dry-run --designator XYZ --slug m17-xyz --port 17000 \
+    --modules B,C,D --country US --name "Tulsa EOC Field Node"
+
+<span class="c"># Publish (runs in the foreground; Ctrl-C to withdraw)</span>
+./m17-advertise --config ../../config/site.json --iface en0</code></pre>
+<p>Sample <code>--dry-run</code> output:</p>
+<pre><code>m17-advertise: auto-detected primary IPv4: 192.168.1.112
+m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
+  TXT: type=reflector
+  TXT: designator=XYZ
+  TXT: slug=m17-xyz
+  TXT: name=Example Field Reflector
+  TXT: sponsor=Example ARC
+  TXT: country=US
+  TXT: url=https://reflector.example.net
+  TXT: ipv4=192.168.1.112
+  TXT: port=17000
+  TXT: modules=ABCD
+  TXT: network_type=residential
+m17-advertise: --dry-run; not publishing.</code></pre>
+<div class="table-wrap"><table>
+<thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>--config FILE</code></td><td>Base record from a <code>reflectors[]</code> JSON entry. The other flags override it.</td></tr>
+<tr><td><code>--designator</code>, <code>--slug</code>, <code>--name</code>, <code>--url</code>, <code>--dns</code></td><td>Identity and display fields.</td></tr>
+<tr><td><code>--ipv4</code>, <code>--ipv6</code></td><td>Addresses placed in TXT. Auto-detected from the default-route interface if omitted.</td></tr>
+<tr><td><code>--port</code></td><td>UDP port. Default 17000.</td></tr>
+<tr><td><code>--modules</code>, <code>--encrypted</code></td><td>Comma-separated letters, e.g. <code>B,C,D</code>.</td></tr>
+<tr><td><code>--sponsor</code>, <code>--country</code>, <code>--description</code>, <code>--network-type</code>, <code>--ip-source</code></td><td>Metadata.</td></tr>
+<tr><td><code>--instance-name</code></td><td>Override the DNS-SD instance name.</td></tr>
+<tr><td><code>--iface</code></td><td>Advertise on one interface only (e.g. <code>wlan0</code>). Default: all interfaces that are up.</td></tr>
+<tr><td><code>--domain</code></td><td>DNS-SD domain. Default <code>local.</code></td></tr>
+<tr><td><code>--dry-run</code></td><td>Print the registration and exit.</td></tr>
+</tbody></table></div>
+<p>To run it as a service on a Linux host outside Docker, use a systemd unit:</p>
+<pre><code><span class="c"># /etc/systemd/system/m17-advertise.service</span>
+[Unit]
+Description=Advertise M17 reflector via mDNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/m17-advertise --config /etc/m17/site.json
+Restart=on-failure
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+<h3 id="mdns-support">Patterns for local support networks</h3>
+
+<h4>Pattern 1: Field node on the site LAN</h4>
+<p>This is the standard case. The go-kit Pi runs the container with host networking on the same Wi-Fi or Ethernet that volunteers join. The reflector announces itself, apps list it, and users connect locally. If the uplink is up, the field node relays through its hub. If not, the site still has a working local net.</p>
+
+<h4>Pattern 2: Pointing a club or EOC network at a remote reflector</h4>
+<p>The club's hub may live on a VPS, not on the local network. A support network can still make it one-tap discoverable: run <code>m17-advertise</code> on any always-on LAN device (the router, a NAS, a Pi) with the <em>hub's</em> public address in the TXT record:</p>
+<pre><code>m17-advertise --designator HUB --slug m17-hub --name "Club Hub (internet)" \
+    --dns m17.club.org --ipv4 203.0.113.17 --ip-source dns \
+    --port 17000 --modules A,B,C,D --url https://m17.club.org</code></pre>
+<div class="callout note"><span class="label">How clients pick an address</span>
+<p>The SRV and A/AAAA records always describe the <em>advertising</em> host. The TXT <code>ipv4</code>, <code>ipv6</code>, and <code>dns</code> keys describe the <em>reflector</em>. When those differ, as in this pattern, the client must use the TXT values. Before relying on this pattern, confirm that your app honors them.</p></div>
+
+<h4>Pattern 3: Several reflectors at one site</h4>
+<p>A large event may run separate reflectors per function (operations, logistics, a shelter net), or keep a local field node beside a remote hub entry. Each has a unique instance name and appears separately in the app's list. Use <code>MREFD_ADVERTISE_NAME</code> and <code>MREFD_ADVERTISE_DESCRIPTION</code> to tell them apart at a glance.</p>
+
+<h4>Pattern 4: Isolated mesh with no uplink</h4>
+<p>On an AREDN or similar mesh, or an air-gapped incident LAN, mDNS still works within each broadcast domain. To reach across segments, see the gateway notes below.</p>
+
+<h3 id="mdns-netreq">Network requirements and pitfalls</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Condition</th><th>Effect</th><th>Remedy</th></tr></thead>
+<tbody>
+<tr><td>Client and reflector on different subnets or VLANs</td><td>Multicast is not routed, so the app never sees the advertisement.</td><td>Put them on the same segment, or enable an mDNS gateway/reflector: Avahi <code>enable-reflector=yes</code>, Ubiquiti "mDNS", MikroTik/OPNsense mDNS repeater.</td></tr>
+<tr><td>Wi-Fi <strong>client isolation</strong> / AP isolation (common on guest and venue Wi-Fi)</td><td>Blocks both mDNS <em>and</em> the M17 traffic itself.</td><td>Bring your own access point, or have the venue disable isolation on your SSID.</td></tr>
+<tr><td>Host firewall drops UDP 5353</td><td>Announcements are sent, but queries are never answered.</td><td>Allow inbound UDP 5353 to <code>224.0.0.251</code> / <code>ff02::fb</code> on the LAN interface.</td></tr>
+<tr><td>Docker bridge mode or Docker Desktop</td><td>Multicast is trapped inside the container network.</td><td>Use host networking on Linux, or set <code>MREFD_ADVERTISE_ENABLED=false</code> and run the advertiser on the host.</td></tr>
+<tr><td>Host runs <code>avahi-daemon</code></td><td>Usually coexists: both share UDP 5353 through socket reuse.</td><td>If discovery is flaky, check that only one responder answers for this service, and stop any duplicate advertisement.</td></tr>
+<tr><td>Multi-homed field node (Wi-Fi + LTE + Ethernet)</td><td>The advertisement may include addresses that local clients cannot reach.</td><td>Pin to the LAN side with <code>--iface</code>. In the container, use a standalone advertiser or an explicit <code>MREFD_IPV4_EXT</code>.</td></tr>
+<tr><td>Some enterprise Wi-Fi drops multicast or converts it to unicast at low rates</td><td>Discovery is slow or intermittent.</td><td>Use a dedicated SSID for the incident network.</td></tr>
+</tbody></table></div>
+
+<h3 id="mdns-test">Testing discovery</h3>
+<p>Run these from another machine on the same network:</p>
+<pre><code><span class="c"># macOS</span>
+dns-sd -B _m17._udp                       <span class="c"># browse: list instances</span>
+dns-sd -L m17-xyz _m17._udp               <span class="c"># resolve: host, port, TXT</span>
+dns-sd -G v4v6 fieldpi.local              <span class="c"># addresses</span>
+
+<span class="c"># Linux (apt install avahi-utils)</span>
+avahi-browse -rt _m17._udp                <span class="c"># browse + resolve + TXT, then exit</span>
+
+<span class="c"># Raw packets, to see whether multicast arrives at all</span>
+sudo tcpdump -i any -n udp port 5353</code></pre>
+<p>If <code>tcpdump</code> on the client shows no packets from the reflector's address, the problem is the network (isolation, VLANs, firewall), not the software.</p>
+
+<h3 id="mdns-clients">For application developers</h3>
+<p>Here is how to add LAN discovery to an M17 client:</p>
+<ol>
+  <li>Browse for <code>_m17._udp</code> in domain <code>local.</code>, using the platform API: <code>NWBrowser</code>/<code>NetServiceBrowser</code> on Apple platforms, <code>NsdManager</code> on Android, Avahi D-Bus or a library such as <code>zeroconf</code> elsewhere.</li>
+  <li>For each instance, resolve SRV and TXT. Treat <code>type=reflector</code> as a reflector entry, and ignore unknown <code>type</code> values.</li>
+  <li>Parse TXT into a dictionary. Merge numbered keys (<code>description0</code>, <code>description1</code>, …) back into their base key. Split <code>modules</code> and <code>encrypted</code> into individual letters.</li>
+  <li>Pick the connect address in this order: TXT <code>ipv6</code>/<code>ipv4</code> when present and reachable, then the resolved SRV target's addresses. Use <code>port</code> from SRV, falling back to TXT and then 17000.</li>
+  <li>Show discovered reflectors in a "Nearby" section, separate from the internet directory, and remove them when the browser reports the service gone.</li>
+  <li>Deduplicate against the internet directory by <code>designator</code>/<code>slug</code>, but prefer the LAN address while it is on the local network.</li>
+</ol>
+
+<h3 id="mdns-security">Security considerations</h3>
+<ul>
+  <li><strong>mDNS is unauthenticated.</strong> Any device on the LAN can advertise <code>_m17._udp</code> under any name. Treat discovered entries as convenient hints, not as trusted identity. At an incident, control who gets on the network.</li>
+  <li><strong>Everything in TXT is broadcast</strong> to the whole segment. Don't put secrets, private contact details, or internal notes there.</li>
+  <li>mDNS is <strong>link-local by design</strong> and never leaves the segment unless you deliberately configure a gateway. Never port-forward UDP 5353 from the internet.</li>
+  <li>The relay link between field node and hub is separate from discovery. It is authenticated with TLS (see below).</li>
+</ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="interlink">
+<h2><span class="num">10</span>Interlinking and relay</h2>
+<p>Interlinks are declared in <code>config/mrefd.interlink</code>. Both sides must list each other, and edits take effect within seconds. One file can mix every form below.</p>
+
+<h3 id="interlink-udp">UDP interlink (community standard)</h3>
+<pre><code><span class="c"># DHT-based: find the peer by callsign on Ham-DHT</span>
+M17-QQQ   ABC
+<span class="c"># Static: literal IP and port</span>
+M17-URF   45.32.11.22  17000  BCD
+<span class="c"># Pre-1.0 "legacy L" peer</span>
+M17-QQQL  44.45.45.100 ABC</code></pre>
+<p>Use UDP between fixed public reflectors, for example a hub peering with other dvref-listed reflectors or a URFD gateway. It needs no certificates. Upstream mrefd accepts only literal IP addresses or DHT lookups in this file, not hostnames, so it cannot follow a field node whose address keeps changing. That gap is what the TLS relay fills.</p>
+
+<h3 id="interlink-tls">TLS relay: field node to hub</h3>
+<p>The fork adds a TLS-over-TCP interlink. The <strong>field node dials out</strong> to the hub, presents an Ed25519 client certificate, and sends a signed <strong>BIRTH</strong> message (identity, timestamp, nonce, requested modules). The hub checks the certificate against the file it has registered for that identity, verifies the signature and timestamp, and installs a peer entry <strong>using the session's source address</strong>. After that, M17 stream and packet frames flow inside the TLS session, with PING/PONG keepalives every 10 seconds.</p>
+<ul>
+  <li>The field node's IP can change at every site. Neither side declares it ahead of time.</li>
+  <li>The field node needs no inbound port, so it works behind CGNAT, LTE, and Starlink.</li>
+  <li>Private field nodes can stay off Ham-DHT and dvref entirely.</li>
+  <li>The field node trusts the hub by <strong>pinning</strong> the hub's server certificate. No public CA is involved.</li>
+  <li>Each reconnect is a fresh BIRTH, so a dropped link recovers on its own.</li>
+</ul>
+<p>The wire format, message types, reject codes, and threat model are in <a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>. For help deciding whether a particular peering needs TLS, see <a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>.</p>
+
+<h3 id="tls-build">Building with TLS support</h3>
+<p>As noted in <a href="#status">Implementation status</a>, the TLS code is on the fork's <code>w5ggw</code> branch. To build an image that includes it:</p>
+<pre><code>cd mrefd
+git fetch origin
+git checkout origin/w5ggw          <span class="c"># TLS interlink implementation</span>
+cd ..
+make build-local                   <span class="c"># or a multi-arch push, see Building images</span></code></pre>
+<p>When mrefd starts with TLS entries present, the log shows <code>TLS interlink layer active.</code></p>
+
+<h3 id="tls-setup">TLS setup, step by step</h3>
+<p>The example below uses a hub <code>M17-HUB</code> at <code>hub.example.org</code> and a field node with identity <code>W5GGW-B</code> sharing modules B, C, and D. Paths assume the <code>deploy/</code> layout, where <code>config/tls/</code> is mounted read-only at <code>/etc/mrefd/tls/</code>.</p>
+<div class="callout warn"><span class="label">Source-build compose</span><p>The root <code>docker-compose.yml</code> does not mount <code>config/tls/</code> yet. If you deploy from source, add <code>- ./config/tls:/etc/mrefd/tls:ro</code> to the <code>mrefd</code> service's volumes.</p></div>
+
+<ol class="steps">
+  <li><strong>Hub: create the server identity.</strong>
+<pre><code>scripts/tls-genkey.sh --identity M17-HUB --role home --out deploy/config/tls/server</code></pre>
+  This writes <code>server.crt</code> and <code>server.key</code> (mode 0600) and prints the SPKI SHA-256 fingerprint. Publish <code>server.crt</code> and its fingerprint somewhere field operators can trust: an HTTPS site, a git repo, or in person.</li>
+
+  <li><strong>Hub: enable the listener.</strong> In <code>mrefd.env</code>:
+<pre><code>MREFD_TLS_SERVER_CERT=/etc/mrefd/tls/server.crt
+MREFD_TLS_SERVER_KEY=/etc/mrefd/tls/server.key</code></pre>
+  Open <strong>TCP 17000</strong> inbound on the hub's firewall.</li>
+
+  <li><strong>Field: create the client identity.</strong>
+<pre><code>scripts/tls-genkey.sh --identity W5GGW-B --role field --out deploy/config/tls/client</code></pre>
+  Send <code>client.crt</code> (public) and its fingerprint to the hub operator. <code>client.key</code> never leaves the field node.</li>
+
+  <li><strong>Field: pin the hub and point at it.</strong> Save the hub's <code>server.crt</code> as <code>config/tls/home.pem</code>, and check its fingerprint against the published value. Then set the following in <code>mrefd.env</code>:
+<pre><code>MREFD_TLS_CLIENT_CERT=/etc/mrefd/tls/client.crt
+MREFD_TLS_CLIENT_KEY=/etc/mrefd/tls/client.key</code></pre>
+  Add this line to <code>config/mrefd.interlink</code>:
+<pre><code>M17-HUB  BCD  tls:hub.example.org:17000  servercert:/etc/mrefd/tls/home.pem</code></pre></li>
+
+  <li><strong>Hub: register the field node.</strong>
+<pre><code>scripts/tls-add-peer.sh --identity W5GGW-B --cert /path/to/received/client.crt --modules BCD</code></pre>
+  This copies the cert to <code>config/tls/peers/W5GGW-B.pub.pem</code> and appends this line:
+<pre><code>W5GGW-B  BCD  key:/etc/mrefd/tls/peers/W5GGW-B.pub.pem</code></pre></li>
+
+  <li><strong>Start or restart both nodes and verify.</strong> Restart, because the <code>MREFD_TLS_*</code> variables are read only at startup. Then check the connection:
+<pre><code>scripts/tls-verify.sh --host hub.example.org --port 17000 --expect-fingerprint &lt;FP&gt;
+scripts/tls-list-peers.sh            <span class="c"># on the hub</span></code></pre></li>
+</ol>
+
+<h4>Ongoing certificate management</h4>
+<ul>
+  <li><strong>Revoke a field node:</strong> <code>scripts/tls-remove-peer.sh --identity W5GGW-B</code> removes the cert and the interlink line and drops the live session.</li>
+  <li><strong>Rotate the hub certificate:</strong> <code>scripts/tls-rotate-server-cert.sh --identity M17-HUB</code>, then redistribute <code>server.crt</code> to every field node.</li>
+  <li><strong>Clocks:</strong> BIRTH timestamps must be within <code>MREFD_TLS_TIMESTAMP_SKEW</code> (default ±300 s). Keep field nodes on NTP, or on a GPS time source when offline.</li>
+</ul>
+<p>Full certificate procedures, including generating certs with plain <code>openssl</code>, are in <a href="../deploy/CERTS.md">deploy/CERTS.md</a>.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="building">
+<h2><span class="num">11</span>Building and publishing images</h2>
+<p>There are two ways to make your own image:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Customize the published image</th><th>Build from source</th></tr></thead>
+<tbody>
+<tr><td>Starts from</td><td><code>FROM ghcr.io/greggwon/mrefd</code></td><td><code>mrefd/</code> submodule + <code>docker/mrefd/Dockerfile</code></td></tr>
+<tr><td>Needs</td><td>Docker and a Dockerfile only</td><td>Full clone with submodules</td></tr>
+<tr><td>Build time</td><td>Seconds (nothing compiled)</td><td>Minutes; long on a Pi or under emulation</td></tr>
+<tr><td>Use it for</td><td>Site or field-kit images: <code>site.json</code>, default interlink, extra tools, default settings</td><td>A fork, mrefd code changes, TLS branch builds, air-gapped hosts</td></tr>
+</tbody></table></div>
+
+<h3 id="derive">Customizing the published image</h3>
+<p>The published image has these properties to build on:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Property</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Platforms</td><td><code>linux/amd64</code>, <code>linux/arm64</code>, <code>linux/arm/v7</code>, <code>linux/386</code></td></tr>
+<tr><td>User</td><td><code>mrefd</code> (uid/gid 1000)</td></tr>
+<tr><td>Entrypoint</td><td><code>/usr/bin/tini -- /entrypoint.sh</code></td></tr>
+<tr><td>Binaries</td><td><code>/usr/local/bin/mrefd</code>, <code>/usr/local/bin/m17-advertise</code></td></tr>
+<tr><td>Paths</td><td><code>/etc/mrefd</code> (config), <code>/var/lib/mrefd</code> (state), <code>/var/log/mrefd</code> (status JSON)</td></tr>
+<tr><td>Base</td><td><code>debian:12-slim</code></td></tr>
+</tbody></table></div>
+<p>Tags published before <code>linux/arm/v7</code> was added to the release build contain only the other three platforms. To check what a tag contains: <code>docker buildx imagetools inspect ghcr.io/greggwon/mrefd:latest</code></p>
+
+<ol class="steps">
+  <li><strong>Create a directory with a Dockerfile and the files to bake in.</strong> It can live anywhere; it does not need to be inside this repo.
+<pre><code>my-field-image/
+├── Dockerfile
+├── site.json          <span class="c"># mDNS advertisement record (optional)</span>
+└── mrefd.interlink    <span class="c"># default interlink file (optional)</span></code></pre>
+<pre><code>FROM ghcr.io/greggwon/mrefd:latest
+
+<span class="c"># Installing packages requires root; switch back afterwards.</span>
+USER root
+RUN apt-get update \
+ &amp;&amp; apt-get install -y --no-install-recommends iputils-ping tcpdump \
+ &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+<span class="c"># Used automatically by the entrypoint when present.</span>
+COPY --chown=mrefd:mrefd site.json /etc/mrefd/site.json
+
+<span class="c"># Default interlink; a bind mount at run time still overrides it.</span>
+COPY --chown=mrefd:mrefd mrefd.interlink /etc/mrefd/mrefd.interlink
+
+<span class="c"># Defaults; values from mrefd.env (env_file) override these.</span>
+ENV MREFD_ADVERTISE_NETWORK_TYPE=residential
+
+USER mrefd</code></pre></li>
+
+  <li><strong>Build it for this machine and check it.</strong>
+<pre><code>cd my-field-image
+docker build -t my-mrefd:field .
+
+docker image inspect my-mrefd:field --format '{{.Config.User}} {{json .Config.Entrypoint}}'
+<span class="c"># → mrefd ["/usr/bin/tini","--","/entrypoint.sh"]</span>
+
+docker run --rm --entrypoint /usr/local/bin/m17-advertise my-mrefd:field \
+    --config /etc/mrefd/site.json --designator XYZ --dry-run</code></pre></li>
+
+  <li><strong>Optional: build multi-arch and push</strong> to your own registry. Nothing is compiled, so this is quick even under emulation. List only platforms the base image publishes.
+<pre><code>docker buildx create --use --name m17-builder 2&gt;/dev/null || true
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
+    --tag ghcr.io/&lt;user&gt;/mrefd-field:latest --push .</code></pre></li>
+
+  <li><strong>Point the deployment at it.</strong> Change the <code>image:</code> line in <code>deploy/docker-compose.yml</code> to <code>my-mrefd:field</code> or your pushed tag, then run <code>docker compose up -d</code>.</li>
+</ol>
+
+<div class="callout warn"><span class="label">Rules for derived images</span>
+<ul>
+  <li><strong>Keep the entrypoint.</strong> It renders <code>mrefd.cfg</code>, starts mrefd, and starts the advertiser. To change its behavior, <code>COPY</code> a modified script over <code>/entrypoint.sh</code> rather than replacing <code>ENTRYPOINT</code>.</li>
+  <li><strong>Always end with <code>USER mrefd</code></strong>, and use <code>--chown=mrefd:mrefd</code> on files you add under <code>/etc/mrefd</code>.</li>
+  <li><strong>Never bake private keys</strong> (<code>server.key</code>, <code>client.key</code>) into an image you push. Mount <code>config/tls/</code> at run time.</li>
+  <li><strong>Values that differ per node stay out of the image.</strong> Callsign and email go in <code>mrefd.env</code>; the image holds only what every node of that kind shares.</li>
+</ul></div>
+
+<p><strong>Keeping it current:</strong> a derived image is a snapshot of its base. To pick up a new release, run <code>docker build --pull -t my-mrefd:field .</code> and then <code>docker compose up -d</code>. For repeatable builds, pin the base by digest: <code>FROM ghcr.io/greggwon/mrefd@sha256:&lt;digest&gt;</code>.</p>
+
+<h3 id="from-source">Building from source</h3>
+<p>The Dockerfile has three stages:</p>
+<ol>
+  <li><strong>build</strong> (Debian 12): compiles mrefd with OpenDHT and libcurl, applies the <code>users.cpp</code> fix, and renders <code>mrefd.mk</code> from build arguments.</li>
+  <li><strong>advertise-build</strong> (golang alpine): builds a static <code>m17-advertise</code> with <code>CGO_ENABLED=0</code>.</li>
+  <li><strong>runtime</strong> (Debian 12 slim): installs runtime libraries and <code>tini</code>, and runs as unprivileged user <code>mrefd</code> (uid 1000).</li>
+</ol>
+<div class="table-wrap"><table>
+<thead><tr><th>Command</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>make build-local</code></td><td>Native-architecture reflector and dashboard images, loaded into the local Docker daemon.</td></tr>
+<tr><td><code>make build</code></td><td>Multi-arch buildx build for <code>BUILD_PLATFORMS</code>. The result stays in the build cache unless pushed.</td></tr>
+<tr><td><code>make build-test</code></td><td>Multi-arch build pushed to <code>ghcr.io/greggwon/mrefd:test</code>.</td></tr>
+<tr><td><code>make build-release</code></td><td>Multi-arch build (<code>386</code>, <code>amd64</code>, <code>arm64</code>, <code>arm/v7</code>) pushed as <code>:latest</code> plus a versioned tag <code>mrefd-&lt;ver&gt;-b&lt;date&gt;</code>.</td></tr>
+<tr><td><code>make show-version</code></td><td>Prints the tags a build would produce.</td></tr>
+</tbody></table></div>
+<p>To publish to your own registry:</p>
+<pre><code>echo "$PAT" | docker login ghcr.io -u &lt;user&gt; --password-stdin
+docker buildx create --use --name m17-builder 2&gt;/dev/null || true
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
+    --file docker/mrefd/Dockerfile --tag ghcr.io/&lt;user&gt;/mrefd:latest --push .</code></pre>
+<p>Then change the <code>image:</code> line in <code>deploy/docker-compose.yml</code>. Building for <code>linux/arm/v7</code> is the slowest target, but it is the one to use for Pi 3 and Zero 2W running a 32-bit OS. More detail is in <a href="../deploy/BUILD.md">deploy/BUILD.md</a>.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="operations">
+<h2><span class="num">12</span>Operations</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Task</th><th>Source build (repo root)</th><th>Prebuilt (<code>deploy/</code>)</th></tr></thead>
+<tbody>
+<tr><td>Start</td><td><code>make up</code> / <code>make up-dashboard</code></td><td><code>docker compose up -d</code></td></tr>
+<tr><td>Stop</td><td><code>make down</code></td><td><code>docker compose down</code></td></tr>
+<tr><td>Apply <code>.env</code> changes</td><td><code>make restart</code></td><td><code>docker compose up -d</code></td></tr>
+<tr><td>Logs</td><td><code>make logs-mrefd</code></td><td><code>docker compose logs -f</code></td></tr>
+<tr><td>Shell in container</td><td><code>make shell</code></td><td><code>docker compose exec mrefd bash</code></td></tr>
+<tr><td>Status</td><td><code>make status</code></td><td><code>docker compose ps</code></td></tr>
+<tr><td>Update</td><td>bump submodule, <code>make build-local</code>, <code>make restart</code></td><td><code>docker compose pull &amp;&amp; docker compose up -d</code></td></tr>
+<tr><td>Wipe state (DHT cache, logs)</td><td><code>make clean</code></td><td><code>docker compose down -v</code></td></tr>
+</tbody></table></div>
+<p>Persistent data lives in two named volumes. <code>mrefd-state</code> holds the DHT node cache, and <code>mrefd-log</code> holds the <code>mrefd.json</code> status file that the dashboard reads. The containers use <code>restart: unless-stopped</code>, so a field node comes back on its own after a power cycle.</p>
+
+<h3>Updating mrefd from upstream</h3>
+<pre><code>cd mrefd
+git fetch upstream
+git merge upstream/master          <span class="c"># into the fork branch you deploy</span>
+cd ..
+git add mrefd &amp;&amp; git commit -m "bump mrefd"
+make build-local &amp;&amp; make restart</code></pre>
+<p>If a new upstream release adds settings to <code>example.cfg</code>, add them to <code>.env.example</code> and to <code>docker/mrefd/entrypoint.sh</code>.</p>
+
+<h3>Field kit checklist</h3>
+<ul>
+  <li>Pi with SD card or SSD, a reliable power supply, and an image already pulled (<code>docker compose pull</code> before you leave home).</li>
+  <li>Your own travel router or access point, with client isolation <strong>off</strong>, so mDNS works regardless of the venue.</li>
+  <li><code>config/tls/client.*</code> and <code>home.pem</code> installed, and the interlink line pointing at the hub.</li>
+  <li>A time source: NTP when online, GPS when not.</li>
+  <li>Test once on the home network: the app finds the node over mDNS, and the hub shows the TLS peer.</li>
+</ul>
+</section>
+
+<!-- ================================================================ -->
+<section id="troubleshooting">
+<h2><span class="num">13</span>Troubleshooting</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Symptom</th><th>Cause and fix</th></tr></thead>
+<tbody>
+<tr><td><code>MREFD_CALLSIGN is required</code> / <code>must be 'M17-' followed by 3…</code></td><td><code>.env</code> is missing or still has placeholders. Run <code>make init</code> or edit the env file.</td></tr>
+<tr><td><code>Is a directory</code> on a list file</td><td>Docker created a directory where a bind-mounted file was missing. Stop the container, <code>rmdir</code> it, <code>touch</code> the file, and start again.</td></tr>
+<tr><td>App on the same Wi-Fi doesn't list the reflector</td><td>Check, in order: <code>MREFD_ADVERTISE_ENABLED</code>, host networking, the log line <code>starting Bonjour advertiser</code>, client isolation, VLANs, and the host firewall on UDP 5353. Run <code>avahi-browse</code> / <code>dns-sd</code> from another machine.</td></tr>
+<tr><td>Listed, but the connection fails</td><td>The advertised address is unreachable (multi-homed host, or a stale <code>MREFD_IPV4_EXT</code>). Pin <code>--iface</code> or correct the TXT address. Also check that UDP 17000 is open on the LAN.</td></tr>
+<tr><td>SRV target shows <code>host.local.local.</code></td><td>Old advertiser build. Rebuild the image.</td></tr>
+<tr><td>Nothing discovered on Docker Desktop (Mac/Windows)</td><td>Expected. Set <code>MREFD_ADVERTISE_ENABLED=false</code> and run <code>m17-advertise</code> natively on the host.</td></tr>
+<tr><td>"Connection refused" on UDP from macOS</td><td>Docker Desktop dual-stack UDP bug. Use <code>docker-compose.bridge.yml</code>, which publishes UDP on IPv4 only.</td></tr>
+<tr><td>DHT shows a private 172.x address</td><td>Bridge mode without <code>MREFD_IPV4_EXT</code>/<code>MREFD_IPV6_EXT</code>. Set them, or use host networking.</td></tr>
+<tr><td>Peers connect but no audio passes</td><td>The two sides have different encryption settings on a shared module.</td></tr>
+<tr><td>No <code>TLS interlink layer active.</code> in the log</td><td>The image was built without TLS (see <a href="#tls-build">Building with TLS support</a>), or the interlink file has no <code>key:</code>/<code>tls:</code> entry.</td></tr>
+<tr><td>Hub rejects BIRTH: timestamp</td><td>The field node's clock is off by more than <code>MREFD_TLS_TIMESTAMP_SKEW</code>. Fix NTP/GPS time.</td></tr>
+<tr><td>Hub rejects BIRTH: unknown identity / bad signature</td><td>The identity in the hub's interlink line doesn't match the field cert's CN, or the registered <code>.pub.pem</code> is outdated. Re-run <code>tls-add-peer.sh --force</code>.</td></tr>
+<tr><td>Field can't complete TLS handshake</td><td>Check that TCP 17000 is open on the hub and that <code>home.pem</code> matches the hub's current cert. Run <code>tls-verify.sh</code>.</td></tr>
+<tr><td><code>linux/arm/v7</code> build fails with <code>shift-count-overflow</code></td><td>The submodule predates the <code>users.cpp</code> fix and the Dockerfile <code>sed</code> didn't match. Move the submodule to a newer commit.</td></tr>
+</tbody></table></div>
+</section>
+
+<!-- ================================================================ -->
+<section id="appendix">
+<h2><span class="num">14</span>Appendix</h2>
+<h3>Related documents in this repository</h3>
+<ul>
+  <li><a href="../README.md">README.md</a>: project overview and developer notes</li>
+  <li><a href="../deploy/README.md">deploy/README.md</a>: the shortest path to a running reflector</li>
+  <li><a href="../deploy/BUILD.md">deploy/BUILD.md</a>: customizing the published image, or building and publishing your own from source</li>
+  <li><a href="../deploy/CERTS.md">deploy/CERTS.md</a>: TLS certificate lifecycle</li>
+  <li><a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>: choosing UDP or TLS for a peering</li>
+  <li><a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>: TLS relay protocol design</li>
+</ul>
+<h3>Standards</h3>
+<ul>
+  <li>RFC 6762: Multicast DNS</li>
+  <li>RFC 6763: DNS-Based Service Discovery</li>
+  <li><a href="https://m17project.org/">M17 Project</a>: protocol specification</li>
+</ul>
+<h3>Credits</h3>
+<p><code>mrefd</code> and its PHP dashboard are © Thomas A. Early, N7TAE, under the GPL. The M17 protocol is developed by the M17 Project. The field-node fork, container packaging, TLS interlink, and <code>m17-advertise</code> are by Gregg Wonderly, W5GGW.</p>
+</section>
+
+<footer>M17export Operator Manual · Keep this file in <code>docs/</code>. It is a single self-contained HTML page that can be opened locally, served by GitHub Pages, or printed.</footer>
+</main>
+</div>
+<script>
+(function () {
+  var root = document.documentElement, key = 'm17docs-theme';
+  try { var saved = localStorage.getItem(key); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+  document.getElementById('themeBtn').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme') ||
+      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem(key, next); } catch (e) {}
+  });
+  document.querySelectorAll('nav.toc a').forEach(function (a) {
+    a.addEventListener('click', function () { document.getElementById('toc').classList.remove('open'); });
+  });
+})();
+</script>
+</body>
+</html>
