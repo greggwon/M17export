@@ -35,6 +35,9 @@ RUN sed -i 's|m_Users\.size() >> LASTHEARD_USERS_MAX_SIZE|m_Users.size() > LASTH
 
 # Render a compile-time mrefd.mk from the build args.
 # BINDIR and CFGDIR are the in-container install paths.
+# CFLAGS += -g keeps full debug info (symbols + line numbers) in every build
+# so users can send a meaningful backtrace; DEBUG=true is separate and also
+# turns on -DDEBUG packet dumps.
 RUN cat > /src/mrefd.mk <<EOF
 USESYMLINK = false
 BINDIR = /usr/local/bin
@@ -42,10 +45,11 @@ CFGDIR = /etc/mrefd
 DEBUG = ${MREFD_BUILD_DEBUG}
 DHT = ${MREFD_BUILD_DHT}
 DAEMON = false
+CFLAGS += -g
 EOF
 
+# Not stripped: the symbol table and debug info stay in the shipped binary.
 RUN make -j"$(nproc)" && \
-    strip mrefd && \
     install -Dm755 mrefd /out/usr/local/bin/mrefd
 
 
