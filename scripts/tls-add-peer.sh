@@ -1,9 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# tls-add-peer.sh - Register a field's public cert on the home reflector.
+# tls-add-peer.sh - Register an operator's public cert on the home reflector.
 #                   Copies the cert into ./config/tls/peers/ and appends the
 #                   matching line to ./config/mrefd.interlink. mrefd's file
 #                   watcher picks up the change within seconds.
+#
+#                   One registration per operator key. Every node holding that
+#                   key may connect, asserting one of --modules, and appears
+#                   at this hub as CALLSIGN-MODULE.
 #
 # Design: docs/tls-interlink-design.md §7.2
 # =============================================================================
@@ -24,21 +28,21 @@ say() { printf 'tls-add-peer: %s\n' "$*" >&2; }
 
 usage() {
     cat <<EOF
-Usage: tls-add-peer.sh --identity <callsign-module> --cert <path> --modules <ABC> [options]
+Usage: tls-add-peer.sh --identity <callsign> --cert <path> --modules <ABC> [options]
 
-Registers a field peer on this home reflector. Copies the peer's public
-cert into the local peer registry and appends the matching line to
-mrefd.interlink so mrefd will accept an incoming TLS connection that
-authenticates with the matching private key.
+Registers an operator's key on this home reflector. Copies the public cert
+into the local peer registry and appends the matching line to
+mrefd.interlink. Any node presenting this key may then connect, asserting
+one of the listed modules; it is named CALLSIGN-MODULE here.
 
 Required:
-  --identity <string>       Peer identity string (must match the cert's CN),
-                            e.g. "W5GGW-B".
-  --cert <path>             Path to the peer's public cert file (PEM).
-  --modules <string>        Modules this peer will share, e.g. "BCD".
+  --identity <string>       Operator's bare callsign; must match the cert's
+                            CN, e.g. "W5GGW".
+  --cert <path>             Path to the operator's public cert file (PEM).
+  --modules <string>        Modules the operator's nodes may assert, e.g. "BCD".
 
 Options:
-  --force                   Replace an existing registration for this identity.
+  --force                   Replace an existing registration for this callsign.
 EOF
 }
 
@@ -63,45 +67,51 @@ done
 [[ -n "$CERT_SRC" ]] || { usage >&2; die "--cert is required"; }
 [[ -n "$MODULES"  ]] || { usage >&2; die "--modules is required"; }
 
-[[ "$IDENTITY" =~ ^[A-Z0-9]+-[A-Z0-9]+$ ]] || \
-    die "identity must be uppercase alphanumeric with a single '-' (got '$IDENTITY')"
+[[ "$IDENTITY" =~ ^[A-Z0-9/]{3,}$ ]] || \
+    die "identity must be the operator's bare callsign in upper case, e.g. W5GGW (got '$IDENTITY'); nodes add their module when they connect"
 [[ "$MODULES"  =~ ^[A-Z]+$ ]] || \
     die "modules must be uppercase A-Z only (got '$MODULES')"
 [[ -f "$CERT_SRC" ]] || die "cert file not found: $CERT_SRC"
 
-command -v openssl >/dev/null 2>&1 || die "openssl not found in PATH"
+OPENSSL="${OPENSSL:-openssl}"
+command -v "$OPENSSL" >/dev/null 2>&1 || die "openssl not found (set OPENSSL=/path/to/openssl)"
+if "$OPENSSL" version 2>/dev/null | grep -q LibreSSL; then
+    die "$("$OPENSSL" version) can't read Ed25519 certificates. On macOS: brew install openssl@3, then rerun with OPENSSL=\$(brew --prefix openssl@3)/bin/openssl"
+fi
 
 # ---- validate the cert ------------------------------------------------------
 # 1. Must be a parseable X.509 PEM certificate.
-openssl x509 -in "$CERT_SRC" -noout 2>/dev/null || \
+"$OPENSSL" x509 -in "$CERT_SRC" -noout 2>/dev/null || \
     die "$CERT_SRC does not parse as an X.509 PEM certificate"
 
 # 2. Cert's Subject CN must match the given identity.
-CERT_CN=$(openssl x509 -in "$CERT_SRC" -noout -subject -nameopt RFC2253 \
+CERT_CN=$("$OPENSSL" x509 -in "$CERT_SRC" -noout -subject -nameopt RFC2253 \
     | sed -E 's/.*CN=([^,]+).*/\1/')
 if [[ "$CERT_CN" != "$IDENTITY" ]]; then
     die "cert's Subject CN is '${CERT_CN}', does not match --identity '${IDENTITY}'"
 fi
 
 # 3. Compute the SPKI fingerprint for logging + duplicate-check.
-FINGERPRINT=$(openssl x509 -in "$CERT_SRC" -pubkey -noout \
-    | openssl pkey -pubin -outform DER 2>/dev/null \
-    | openssl dgst -sha256 -binary \
-    | openssl base64)
+FINGERPRINT=$("$OPENSSL" x509 -in "$CERT_SRC" -pubkey -noout \
+    | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
+    | "$OPENSSL" dgst -sha256 -binary \
+    | "$OPENSSL" base64)
 
 # ---- ensure directories -----------------------------------------------------
 mkdir -p "$PEERS_DIR"
 touch "$INTERLINK"
 
-DEST_CERT="${PEERS_DIR}/${IDENTITY}.pub.pem"
-CONTAINER_CERT="${CONTAINER_PEERS_DIR}/${IDENTITY}.pub.pem"
+# '/' (portable callsigns like W5GGW/P) can't appear in a filename.
+FILE_ID="${IDENTITY//\//_}"
+DEST_CERT="${PEERS_DIR}/${FILE_ID}.pub.pem"
+CONTAINER_CERT="${CONTAINER_PEERS_DIR}/${FILE_ID}.pub.pem"
 
 # ---- duplicate check --------------------------------------------------------
 if [[ -e "$DEST_CERT" ]]; then
-    EXISTING_FP=$(openssl x509 -in "$DEST_CERT" -pubkey -noout \
-        | openssl pkey -pubin -outform DER 2>/dev/null \
-        | openssl dgst -sha256 -binary \
-        | openssl base64)
+    EXISTING_FP=$("$OPENSSL" x509 -in "$DEST_CERT" -pubkey -noout \
+        | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
+        | "$OPENSSL" dgst -sha256 -binary \
+        | "$OPENSSL" base64)
     if [[ "$EXISTING_FP" == "$FINGERPRINT" ]]; then
         say "identity '${IDENTITY}' is already registered with this exact cert."
         say "nothing to do."
@@ -121,10 +131,10 @@ if [[ -d "$PEERS_DIR" ]]; then
     for existing in "$PEERS_DIR"/*.pub.pem; do
         [[ -e "$existing" ]] || continue
         [[ "$existing" == "$DEST_CERT" ]] && continue
-        EFP=$(openssl x509 -in "$existing" -pubkey -noout \
-            | openssl pkey -pubin -outform DER 2>/dev/null \
-            | openssl dgst -sha256 -binary \
-            | openssl base64)
+        EFP=$("$OPENSSL" x509 -in "$existing" -pubkey -noout \
+            | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
+            | "$OPENSSL" dgst -sha256 -binary \
+            | "$OPENSSL" base64)
         if [[ "$EFP" == "$FINGERPRINT" ]]; then
             other=$(basename "$existing" .pub.pem)
             die "this cert's fingerprint is already registered as identity '${other}'"
@@ -148,3 +158,4 @@ printf '%-14s %-6s key:%s\n' "$IDENTITY" "$MODULES" "$CONTAINER_CERT" >> "$INTER
 say "appended interlink line: ${IDENTITY} ${MODULES} key:${CONTAINER_CERT}"
 say "fingerprint: ${FINGERPRINT}"
 say "done. mrefd will pick up the change on its next file-watch cycle."
+say "nodes using this key connect as ${IDENTITY}-<module>, module one of ${MODULES}."

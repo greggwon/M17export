@@ -46,7 +46,6 @@ Success looks like:
 
 ```
 Reflector M17-XYZ started and listening
-PutDHTConfig() successful
 ```
 
 To stop: `docker compose down`. To update to a newer image later:
@@ -60,7 +59,6 @@ To stop: `docker compose down`. To update to a newer image later:
 |---------------------------|-------|--------------|
 | M17 protocol              | UDP   | 17000        |
 | TLS interlink (optional)  | TCP   | 17000        |
-| Ham-DHT                   | UDP   | 17171        |
 | mDNS advertisement (LAN)  | UDP   | 5353         |
 
 ## When something breaks

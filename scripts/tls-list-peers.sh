@@ -2,11 +2,12 @@
 # =============================================================================
 # tls-list-peers.sh - Print the current TLS peer registry.
 #
-# Reports for each registered peer:
-#   - identity (callsign-<module>)
+# Reports for each registered operator key:
+#   - callsign (the cert's CN)
+#   - modules its nodes may assert, from the interlink line
+#   - nodes currently connected with it, CALLSIGN-<module>@address
+#     (from mrefd.json if available)
 #   - cert SPKI SHA-256 fingerprint
-#   - modules from the interlink line
-#   - active session state (from mrefd.json if available)
 #
 # Design: docs/tls-interlink-design.md §7.4
 # =============================================================================
@@ -44,16 +45,25 @@ while (( $# > 0 )); do
     esac
 done
 
-command -v openssl >/dev/null 2>&1 || die "openssl not found in PATH"
+OPENSSL="${OPENSSL:-openssl}"
+command -v "$OPENSSL" >/dev/null 2>&1 || die "openssl not found (set OPENSSL=/path/to/openssl)"
+if "$OPENSSL" version 2>/dev/null | grep -q LibreSSL; then
+    die "$("$OPENSSL" version) can't read Ed25519 certificates. On macOS: brew install openssl@3, then rerun with OPENSSL=\$(brew --prefix openssl@3)/bin/openssl"
+fi
 
 # ---- gather -----------------------------------------------------------------
 declare -a IDS FPS MODS STATES IPS
 
 fingerprint() {
-    openssl x509 -in "$1" -pubkey -noout 2>/dev/null \
-        | openssl pkey -pubin -outform DER 2>/dev/null \
-        | openssl dgst -sha256 -binary 2>/dev/null \
-        | openssl base64
+    "$OPENSSL" x509 -in "$1" -pubkey -noout 2>/dev/null \
+        | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
+        | "$OPENSSL" dgst -sha256 -binary 2>/dev/null \
+        | "$OPENSSL" base64
+}
+
+callsign_of() {
+    "$OPENSSL" x509 -in "$1" -noout -subject -nameopt RFC2253 2>/dev/null \
+        | sed -E 's/.*CN=([^,]+).*/\1/'
 }
 
 modules_for() {
@@ -70,16 +80,15 @@ modules_for() {
     fi
 }
 
-lookup_session() {
+# Connected nodes for an operator key: "CALL-B@1.2.3.4 CALL-C@5.6.7.8".
+lookup_nodes() {
     local id="$1"
     if [[ -r "$JSON_STATUS_PATH" ]] && command -v jq >/dev/null 2>&1; then
-        local ip
-        ip=$(jq -r --arg id "$id" '
+        jq -r --arg id "$id" '
             (.tls_peers // .peers // [])[]
-            | select((.identity // .callsign) == $id)
-            | (.ip // .addr // .source_ip // empty)
-        ' "$JSON_STATUS_PATH" 2>/dev/null | head -1)
-        printf '%s' "${ip:-}"
+            | select((.identity // .callsign) | startswith($id + "-"))
+            | "\(.identity // .callsign)@\(.ip // .addr // .source_ip // "?")"
+        ' "$JSON_STATUS_PATH" 2>/dev/null | sort -u | paste -sd' ' -
     fi
 }
 
@@ -94,14 +103,15 @@ fi
 
 shopt -s nullglob
 for cert in "$PEERS_DIR"/*.pub.pem; do
-    id=$(basename "$cert" .pub.pem)
+    id=$(callsign_of "$cert")
+    [[ -n "$id" ]] || id=$(basename "$cert" .pub.pem)
     IDS+=("$id")
     FPS+=("$(fingerprint "$cert")")
     MODS+=("$(modules_for "$id")")
-    ip=$(lookup_session "$id")
-    if [[ -n "$ip" ]]; then
+    nodes=$(lookup_nodes "$id")
+    if [[ -n "$nodes" ]]; then
         STATES+=("connected")
-        IPS+=("$ip")
+        IPS+=("$nodes")
     else
         STATES+=("idle")
         IPS+=("")
@@ -114,11 +124,11 @@ render_table() {
         echo "(no peers registered)"
         return
     fi
-    printf '%-14s  %-8s  %-9s  %-15s  %s\n' IDENTITY MODULES STATE ADDRESS FINGERPRINT
-    printf '%-14s  %-8s  %-9s  %-15s  %s\n' -------- ------- ----- ------- -----------
+    printf '%-10s  %-8s  %-9s  %-46s  %s\n' CALLSIGN MODULES STATE FINGERPRINT NODES
+    printf '%-10s  %-8s  %-9s  %-46s  %s\n' -------- ------- ----- ----------- -----
     for i in "${!IDS[@]}"; do
-        printf '%-14s  %-8s  %-9s  %-15s  %s\n' \
-            "${IDS[i]}" "${MODS[i]:--}" "${STATES[i]}" "${IPS[i]:--}" "${FPS[i]}"
+        printf '%-10s  %-8s  %-9s  %-46s  %s\n' \
+            "${IDS[i]}" "${MODS[i]:--}" "${STATES[i]}" "${FPS[i]}" "${IPS[i]:--}"
     done
 }
 
@@ -126,7 +136,7 @@ render_json() {
     printf '{"peers":['
     local sep=""
     for i in "${!IDS[@]}"; do
-        printf '%s{"identity":"%s","modules":"%s","state":"%s","address":"%s","fingerprint":"%s"}' \
+        printf '%s{"callsign":"%s","modules":"%s","state":"%s","nodes":"%s","fingerprint":"%s"}' \
             "$sep" "${IDS[i]}" "${MODS[i]}" "${STATES[i]}" "${IPS[i]}" "${FPS[i]}"
         sep=","
     done

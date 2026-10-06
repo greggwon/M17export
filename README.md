@@ -9,8 +9,12 @@ configure lighttpd + PHP" down to "fill in a form, run one `make`".
 The primary deployment target is a small always-on Linux computer (Raspberry
 Pi 3/4/5, Zero 2W, a NUC, an old ThinkPad in a closet, or any Linux VPS).
 IPv4 and IPv6 are equal-footing deployment paths — the default networking
-model avoids NAT entirely so Ham-DHT external-address probing "just works"
-on dual-stack hosts.
+model avoids NAT entirely so real dual-stack traffic reaches the reflector.
+
+M17export builds mrefd **without Ham-DHT**. Field nodes reach the wider
+network only through their TLS link to a hub and are never published; hubs
+interlink using static addresses or TLS. Anyone who wants stock DHT
+behaviour can build upstream `mrefd`.
 
 ---
 
@@ -189,9 +193,9 @@ restart needed.
 By default the mrefd service uses `network_mode: host`. This means:
 
 - `mrefd` binds directly on the host's IPv4 and IPv6 wildcards.
-- No NAT rewrite → Ham-DHT publishes real reachable addresses without you
-  having to hand-set `MREFD_IPV4_EXT` / `MREFD_IPV6_EXT`.
-- The `M17_PORT` / `DHT_PORT` values in `.env` are used by `mrefd` itself and
+- No NAT rewrite → peers and the mDNS advertisement see real reachable
+  addresses without you having to hand-set `MREFD_IPV4_EXT` / `MREFD_IPV6_EXT`.
+- The `M17_PORT` value in `.env` is used by `mrefd` itself and
   as the values you'll open on your firewall — Docker isn't publishing them,
   the container is listening on the host's real ports directly.
 
@@ -215,7 +219,7 @@ docker compose -f docker-compose.yml -f docker-compose.bridge.yml \
 ```
 
 In bridge mode you probably want to set `MREFD_IPV4_EXT` / `MREFD_IPV6_EXT`
-in `.env` to your public addresses, or the DHT will advertise the container's
+in `.env` to your host's addresses, or mDNS will advertise the container's
 internal IP.
 
 ### macOS Docker Desktop quirks
@@ -293,7 +297,6 @@ Individual flags override values loaded from `--config`. See
 |----------------------------|-------|--------------|-----------|------------------------------------------------------|
 | M17 protocol               | UDP   | 17000        | inbound   | always                                               |
 | TLS-authenticated interlink| TCP   | 17000        | inbound   | interlink file has `key:` or `tls:` entries          |
-| Ham-DHT peer discovery     | UDP   | 17171        | inbound   | `MREFD_DHT_ENABLED=true`                             |
 | Bonjour / mDNS advertise   | UDP   | 5353         | local LAN | `MREFD_ADVERTISE_ENABLED=true` (default)             |
 | Web dashboard (HTTP)       | TCP   | 8080         | inbound   | dashboard profile started                            |
 | Web dashboard (HTTPS)      | TCP   | 443          | inbound   | if you front the dashboard with TLS                  |
@@ -317,8 +320,8 @@ file itself has inline comments for the rest. Grouped for reference:
 | `MREFD_CALLSIGN`                 | `M17-XYZ` — must be unused (check dvref.com)  |
 | `MREFD_MODULES`                  | Subset of A–Z, one processing thread per module |
 | `MREFD_COUNTRY`                  | ISO 2-letter country code                     |
-| `MREFD_EMAIL`                    | Admin contact, published on the DHT           |
-| `MREFD_DASHBOARD_URL`            | Public URL shown on the DHT record            |
+| `MREFD_EMAIL`                    | Admin contact                                 |
+| `MREFD_DASHBOARD_URL`            | Dashboard URL, advertised over mDNS           |
 | `MREFD_SPONSOR`                  | Optional club/organization name (no `=` char) |
 
 ### Encryption
@@ -341,21 +344,18 @@ over the air.
 | `MREFD_IPV4_EXT`  | Override auto-detected v4 external address. Rarely needed.  |
 | `MREFD_IPV6_EXT`  | Override auto-detected v6 external address. Rarely needed.  |
 | `M17_PORT`        | Host-side M17 port (host-mode: same as `MREFD_PORT`)        |
-| `DHT_PORT`        | Host-side DHT port                                          |
 | `DASHBOARD_PORT`  | Host-side HTTP port for the dashboard                       |
 
-### Ham-DHT
+### Ham-DHT (not used)
 
-| Var                    | Purpose                                                 |
-|------------------------|---------------------------------------------------------|
-| `MREFD_DHT_ENABLED`    | `true` to publish/discover peers via DHT (recommended)  |
-| `MREFD_BOOTSTRAP`      | Existing DHT node to bootstrap from                     |
+M17export is built and run without Ham-DHT. `MREFD_BUILD_DHT` and
+`MREFD_DHT_ENABLED` both default to `false`; leave them that way.
 
 ### Build-time (rebuild required)
 
 | Var                | Purpose                             |
 |--------------------|-------------------------------------|
-| `MREFD_BUILD_DHT`  | Compile DHT support in              |
+| `MREFD_BUILD_DHT`  | Compile DHT support in (default off)|
 | `MREFD_BUILD_DEBUG`| Debug symbols + `-DDEBUG`           |
 
 ### Dashboard
@@ -400,18 +400,17 @@ Full protocol / handshake / config-file syntax:
 An M17 reflector by itself is useful. Interlinked reflectors are what makes
 the network. Every entry you add to `./config/mrefd.interlink` peers your
 reflector to another `mrefd` (or a `urfd` gateway that exports an XLX / DMR /
-D-STAR / YSF room into M17). The three interlink formats — DHT-only,
-legacy IP+port, and pre-1.0 "legacy L" peers — are described in comments at
-the top of that file; the wizard seeds a copy of the upstream template for
-you.
+D-STAR / YSF room into M17). Because M17export is built without Ham-DHT,
+peers are listed by static IP and port (or, for field nodes, by TLS) rather
+than by callsign lookup; the formats are described in comments at the top
+of that file.
 
 - The community list of active reflectors and interlink gateways is at
-  **[https://dvref.com](https://dvref.com)**. Once your reflector is on the
-  DHT and publicly reachable, register it there so other operators find it.
-- Interlink relationships are bidirectional: both sides must list each other.
-  When using DHT, that's a two-line change on each side. When using the
-  legacy IP+port form, both sides need to keep the encryption capabilities of
-  the shared module aligned or traffic will silently drop.
+  **[https://dvref.com](https://dvref.com)** — useful for finding a public
+  reflector's address to interlink with.
+- Interlink relationships are bidirectional: both sides must list each other,
+  and both sides need to keep the encryption capabilities of the shared
+  module aligned or traffic will silently drop.
 - Edits to `./config/mrefd.interlink` are picked up by the running reflector
   within a few seconds — no restart.
 
@@ -488,7 +487,7 @@ make logs-mrefd        # just mrefd
 make logs-dashboard    # just dashboard
 make shell             # shell inside the mrefd container
 make status            # container status
-make clean             # down + remove named volumes (DHT state, logs)
+make clean             # down + remove named volumes (state, logs)
 make prune             # clean + remove local images
 make first             # one-shot: submodules + init + build-local + up-dashboard
 ```
@@ -529,9 +528,6 @@ docker buildx build --pull ...      # or `make build-local` after `docker pull d
 - **Peers connect but audio doesn't pass** — check that
   `MREFD_ENCRYPTION_ALLOWED` matches the peer for the shared module; a
   mismatch on encryption support silently drops streams.
-- **DHT shows your container's internal IP** — you're in bridge mode without
-  `MREFD_IPV4_EXT` / `MREFD_IPV6_EXT`. Either set those, or switch to the
-  default host-networking layout.
 - **IPv6 traffic doesn't arrive** — verify your host has native IPv6
   (`curl -6 https://icanhazip.com` from inside the container). For bridge
   mode, also confirm `/etc/docker/daemon.json` has `"ipv6": true` and Docker

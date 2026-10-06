@@ -7,5 +7,8 @@
 #   M17-QQQL 44.45.45.100 ABC             pre-1.0 "legacy L" peer
 #
 # TLS forms (authenticated, IP-independent):
-#   W5GGW-B  BCD  key:/etc/mrefd/tls/peers/W5GGW-B.pub.pem
-#   M17-HOM  BCD  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
+#   Hub: register an operator's key (one per operator, not per node). Their
+#   nodes may each assert one of these modules and appear as W5GGW-B, ...
+#     W5GGW    BCD  key:/etc/mrefd/tls/peers/W5GGW.pub.pem
+#   Field node: dial the hub, asserting the ONE module this node links.
+#     M17-HOM  B    tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem

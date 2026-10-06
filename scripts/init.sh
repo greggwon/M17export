@@ -74,18 +74,12 @@ if [[ -z "${SKIP_ENV:-}" ]]; then
         '^[^=]*$' "cannot contain '='")
     [[ "$SPONSOR" == "-" ]] && SPONSOR=""
 
-    say "Ham-DHT"
-    DHT_ENABLED=$(ask "Enable Ham-DHT? (true/false)" "true" \
-        '^(true|false)$' "must be true or false")
-    if [[ "$DHT_ENABLED" == "true" ]]; then
-        BOOTSTRAP=$(ask "DHT bootstrap node" "xrf757.openquad.net")
-    else
-        BOOTSTRAP="xrf757.openquad.net"
-    fi
+    # M17export builds without Ham-DHT; nodes link through TLS to a hub.
+    DHT_ENABLED=false
+    BOOTSTRAP="xrf757.openquad.net"
 
     say "Ports (leave as-is unless you have a conflict)"
     M17_PORT=$(ask "M17 UDP port" "17000" '^[0-9]+$' "must be a number")
-    DHT_PORT=$(ask "DHT UDP port" "17171" '^[0-9]+$' "must be a number")
     DASH_PORT=$(ask "Dashboard TCP port (host side)" "8080" '^[0-9]+$' "must be a number")
 
     say "Writing $ENV_FILE"
@@ -110,7 +104,6 @@ if [[ -z "${SKIP_ENV:-}" ]]; then
     sedi "s|^MREFD_BUILD_DHT=.*|MREFD_BUILD_DHT=${DHT_ENABLED}|"      "$ENV_FILE"
     sedi "s|^MREFD_BOOTSTRAP=.*|MREFD_BOOTSTRAP=${BOOTSTRAP}|"        "$ENV_FILE"
     sedi "s|^M17_PORT=.*|M17_PORT=${M17_PORT}|"                       "$ENV_FILE"
-    sedi "s|^DHT_PORT=.*|DHT_PORT=${DHT_PORT}|"                       "$ENV_FILE"
     sedi "s|^DASHBOARD_PORT=.*|DASHBOARD_PORT=${DASH_PORT}|"          "$ENV_FILE"
     sedi "s|^MREFD_PORT=.*|MREFD_PORT=${M17_PORT}|"                   "$ENV_FILE"
 
@@ -148,6 +141,5 @@ Next steps:
 
 Firewall reminder - allow inbound on the host:
   UDP ${M17_PORT:-17000}   (M17 protocol)
-  UDP ${DHT_PORT:-17171}   (Ham-DHT, if enabled)
   TCP ${DASH_PORT:-8080}   (dashboard, if enabled)
 NEXT

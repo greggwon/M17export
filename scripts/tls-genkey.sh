@@ -3,6 +3,13 @@
 # tls-genkey.sh - Generate an Ed25519 keypair + self-signed cert for use as a
 #                 TLS interlink identity (either home-server or field-client).
 #
+# Field role: ONE certificate per operator, CN = bare callsign (W5GGW). Every
+# node that operator runs uses the same cert and asserts its own module in
+# its mrefd.interlink line, so the hub names each node CALLSIGN-MODULE.
+#
+# Needs OpenSSL 1.1.1+ (Ed25519). macOS's /usr/bin/openssl is LibreSSL and
+# can't do this; install Homebrew's openssl@3 or point OPENSSL at one.
+#
 # Design: docs/tls-interlink-design.md §7.1
 # =============================================================================
 set -euo pipefail
@@ -16,15 +23,17 @@ say()  { printf 'tls-genkey: %s\n' "$*" >&2; }
 
 usage() {
     cat <<EOF
-Usage: tls-genkey.sh --identity <callsign-module> [options]
+Usage: tls-genkey.sh --identity <callsign> [options]
 
 Generates an Ed25519 keypair and self-signed X.509 cert. The cert's
 Subject CN is set to the identity string; the SPKI fingerprint is
 printed for out-of-band sharing.
 
 Required:
-  --identity <string>       e.g. "W5GGW-B" (field) or "M17-HOM" (home).
-                            Used as the cert's Subject CN.
+  --identity <string>       Used as the cert's Subject CN.
+                              field: the operator's bare callsign, e.g. W5GGW
+                                     (no module - each node asserts its own)
+                              home:  the reflector's name, e.g. M17-HOM
 
 Options:
   --out <prefix>            Output prefix. Files written are <prefix>.crt
@@ -64,10 +73,15 @@ while (( $# > 0 )); do
 done
 
 [[ -n "$IDENTITY" ]] || { usage >&2; die "--identity is required"; }
-[[ "$IDENTITY" =~ ^[A-Z0-9]+-[A-Z0-9]+$ ]] || \
-    die "identity must be uppercase alphanumeric with a single '-', e.g. W5GGW-B"
 [[ "$ROLE" == "field" || "$ROLE" == "home" ]] || \
     die "--role must be 'field' or 'home' (got '$ROLE')"
+if [[ "$ROLE" == "field" ]]; then
+    [[ "$IDENTITY" =~ ^[A-Z0-9/]{3,}$ ]] || \
+        die "field identity must be your bare callsign in upper case, e.g. W5GGW (got '$IDENTITY'). One cert serves all your nodes; each node names its module in mrefd.interlink."
+else
+    [[ "$IDENTITY" =~ ^[A-Z0-9/-]{3,}$ ]] || \
+        die "home identity must be upper-case letters, digits, '/' or '-', e.g. M17-HOM (got '$IDENTITY')"
+fi
 [[ "$DAYS" =~ ^[0-9]+$ ]] || die "--days must be an integer"
 
 if [[ -z "$OUT_PREFIX" ]]; then
@@ -81,7 +95,11 @@ CERT_FILE="${OUT_PREFIX}.crt"
 KEY_FILE="${OUT_PREFIX}.key"
 
 # ---- pre-flight checks ------------------------------------------------------
-command -v openssl >/dev/null 2>&1 || die "openssl not found in PATH"
+OPENSSL="${OPENSSL:-openssl}"
+command -v "$OPENSSL" >/dev/null 2>&1 || die "openssl not found (set OPENSSL=/path/to/openssl)"
+if "$OPENSSL" version 2>/dev/null | grep -q LibreSSL; then
+    die "$("$OPENSSL" version) can't create Ed25519 certificates. On macOS: brew install openssl@3, then rerun with OPENSSL=\$(brew --prefix openssl@3)/bin/openssl"
+fi
 
 mkdir -p "$(dirname "$OUT_PREFIX")"
 
@@ -97,23 +115,25 @@ fi
 say "generating Ed25519 keypair for identity '${IDENTITY}' (role=${ROLE})"
 
 # Ed25519 signs itself; no digest algorithm needed on -x509.
-openssl req -x509 -newkey ed25519 -nodes \
-    -days "$DAYS" \
-    -subj "/CN=${IDENTITY}" \
-    -addext "subjectAltName=DNS:${IDENTITY}" \
-    -keyout "$KEY_FILE" \
-    -out    "$CERT_FILE" \
-    2>/dev/null
+if ! REQ_ERR=$("$OPENSSL" req -x509 -newkey ed25519 -nodes \
+        -days "$DAYS" \
+        -subj "/CN=${IDENTITY}" \
+        -addext "subjectAltName=DNS:${IDENTITY}" \
+        -keyout "$KEY_FILE" \
+        -out    "$CERT_FILE" 2>&1); then
+    printf '%s\n' "$REQ_ERR" >&2
+    die "openssl could not create the certificate"
+fi
 
 chmod 0600 "$KEY_FILE"
 chmod 0644 "$CERT_FILE"
 
 # ---- fingerprint ------------------------------------------------------------
 # SPKI SHA-256 fingerprint (base64) - what mrefd will match against.
-FINGERPRINT=$(openssl x509 -in "$CERT_FILE" -pubkey -noout \
-    | openssl pkey -pubin -outform DER 2>/dev/null \
-    | openssl dgst -sha256 -binary \
-    | openssl base64)
+FINGERPRINT=$("$OPENSSL" x509 -in "$CERT_FILE" -pubkey -noout \
+    | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
+    | "$OPENSSL" dgst -sha256 -binary \
+    | "$OPENSSL" base64)
 
 say "cert : $CERT_FILE"
 say "key  : $KEY_FILE  (0600, keep private)"
@@ -124,13 +144,18 @@ case "$ROLE" in
   field)
     cat >&2 <<NEXT
 
-Next: send $CERT_FILE (the .crt only, NOT the .key) to your home
-reflector's operator, along with:
-  - identity:    ${IDENTITY}
-  - fingerprint: ${FINGERPRINT}
-  - modules you want to share
+Copy this same cert + key to every node you run. Each node picks its
+module in its own mrefd.interlink, e.g. for module B:
+  M17-HOM  B  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
+and is known at the hub as ${IDENTITY}-B.
 
-Home operator registers it with:
+Send $CERT_FILE (the .crt only, NOT the .key) to the hub's operator,
+along with:
+  - callsign:    ${IDENTITY}
+  - fingerprint: ${FINGERPRINT}
+  - the modules your nodes will use
+
+Hub operator registers it once, for all your nodes:
   scripts/tls-add-peer.sh --identity ${IDENTITY} \\
       --cert <path-to-received.crt> --modules <BCD-etc>
 NEXT

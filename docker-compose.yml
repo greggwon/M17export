@@ -25,7 +25,7 @@ services:
       dockerfile: docker/mrefd/Dockerfile
       args:
         MREFD_BUILD_DEBUG: ${MREFD_BUILD_DEBUG:-false}
-        MREFD_BUILD_DHT:   ${MREFD_BUILD_DHT:-true}
+        MREFD_BUILD_DHT:   ${MREFD_BUILD_DHT:-false}
     container_name: mrefd
     restart: unless-stopped
     # Host networking: mrefd is directly reachable on the host's IPv4 and

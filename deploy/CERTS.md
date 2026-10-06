@@ -12,11 +12,14 @@ There are three certificates in play for any TLS interlink:
 
 1. **Server cert** on the *home* reflector — presented on incoming TLS so
    field peers know they're talking to the right server.
-2. **Client cert** on the *field* reflector — presented on outbound TLS
-   and used by the field to sign its BIRTH message.
-3. **Peer registration files** on the home reflector — one PEM per field
-   peer, dropped in `config/tls/peers/` so the home knows which field
-   identities to accept.
+2. **Operator cert** used by the *field* nodes — **one per operator,
+   shared by all of that operator's nodes**. Its CN is the operator's bare
+   callsign (`W5GGW`). Each node presents it on outbound TLS, signs its
+   BIRTH message with it, and asserts the one module it is linking. The
+   hub names the node `CALLSIGN-MODULE` (`W5GGW-B`, `W5GGW-C`, ...).
+3. **Peer registration files** on the home reflector — one PEM per
+   operator, dropped in `config/tls/peers/` so the home knows which keys
+   to accept and which modules each key's nodes may assert.
 
 The current model uses **self-signed Ed25519 certs** for all three. A
 CA-signed model (one trust anchor at the home, signed field certs) is
@@ -33,11 +36,13 @@ described at the end as a future direction.
 |  * client.crt     |     (mutually visible)    |  * server.crt      |
 |  * client.key     |                           |  * server.key      |
 |  * home.pem       |                           |  * peers/          |
-|    (pinned)       |                           |    W5GGW-B.pub.pem |
+|    (pinned)       |                           |    W5GGW.pub.pem   |
 +-------------------+                           +--------------------+
 
 Home trusts field: home matches the incoming TLS peer's cert fingerprint
-                   against the file at config/tls/peers/<IDENTITY>.pub.pem
+                   against the files in config/tls/peers/; the matching
+                   cert's CN is the node's callsign, the node picks the
+                   module (one the registration allows)
 Field trusts home: field pins the exact server cert file (home.pem)
                    as the ONLY trust anchor
 ```
@@ -50,7 +55,13 @@ per-connection.
 ## Generating certs
 
 The container ships `scripts/tls-genkey.sh` (also available in the
-M17export source repo). One invocation per identity.
+M17export source repo). One invocation per identity: one for the hub,
+one per operator (not per node).
+
+The script needs OpenSSL 1.1.1 or newer. macOS's `/usr/bin/openssl` is
+LibreSSL, which can't make Ed25519 certificates; install Homebrew's
+`openssl@3` and run the scripts with
+`OPENSSL=$(brew --prefix openssl@3)/bin/openssl`.
 
 ### Home operator
 
@@ -73,27 +84,43 @@ repo, your website). No secret material leaves the home.
 
 ```bash
 scripts/tls-genkey.sh \
-    --identity W5GGW-B \
+    --identity W5GGW \
     --role field \
     --out /path/to/deploy/config/tls/client
 ```
 
 Produces `client.crt` (public, send to home admin) and `client.key`
-(private, 0600, stays on the field box). Prints the fingerprint.
+(private, 0600). Prints the fingerprint. Copy the **same** pair to every
+node you run; each node is told apart by the module it asserts, not by
+its certificate.
 
-Also fetch the home's `server.crt` from wherever it's published, save
-it as `config/tls/home.pem` on the field box, and set
-`MREFD_TLS_HOME_CERT=/etc/mrefd/tls/home.pem` in `mrefd.env`.
+On each node, fetch the home's `server.crt` from wherever it's
+published, save it as `config/tls/home.pem`, and add a line to that
+node's `config/mrefd.interlink` naming the hub and the **one** module
+this node links:
 
-### Home operator registers the field's cert
+```
+M17-HOM  B  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
+```
 
-Home operator receives `client.crt` from the field, saves it as
-`config/tls/peers/W5GGW-B.pub.pem`, and adds a line to
+A second node using module C has the same cert and key, and `C` in that
+position. The hub sees them as `W5GGW-B` and `W5GGW-C`.
+
+### Home operator registers the operator's cert
+
+Once per operator, however many nodes they run. Home operator receives
+`client.crt`, saves it as
+`config/tls/peers/W5GGW.pub.pem`, and adds a line to
 `config/mrefd.interlink`:
 
 ```
-W5GGW-B  BCD  key:/etc/mrefd/tls/peers/W5GGW-B.pub.pem
+W5GGW  BCD  key:/etc/mrefd/tls/peers/W5GGW.pub.pem
 ```
+
+`BCD` is the set of modules that operator's nodes may assert. The
+callsign on the line must equal the cert's CN, or mrefd skips the line
+with a log message. `scripts/tls-add-peer.sh --identity W5GGW --cert
+client.crt --modules BCD` does both steps and checks the CN for you.
 
 mrefd hot-reloads the interlink file within seconds — no restart needed.
 
@@ -107,8 +134,8 @@ If you don't have the helper script handy:
 # Ed25519 self-signed cert, 10-year validity, Subject CN = identity
 openssl req -x509 -newkey ed25519 -nodes \
     -days 3650 \
-    -subj "/CN=W5GGW-B" \
-    -addext "subjectAltName=DNS:W5GGW-B" \
+    -subj "/CN=W5GGW" \
+    -addext "subjectAltName=DNS:W5GGW" \
     -keyout client.key -out client.crt
 
 chmod 0600 client.key
@@ -171,10 +198,11 @@ verify the file's SPKI matches independently.
 
 ## Rotation
 
-### Field rotates its key
+### Operator rotates their key
 
-1. Field: `scripts/tls-genkey.sh --identity <same> --role field --out … --force`
-2. Field sends new `client.crt` to home.
+1. Operator: `scripts/tls-genkey.sh --identity <same> --role field --out … --force`
+2. Operator sends new `client.crt` to home and copies the new pair to
+   every one of their nodes.
 3. Home: `scripts/tls-add-peer.sh --identity <same> --cert client.crt \
    --modules BCD --force` (or just replace the file and let mrefd
    hot-reload).
@@ -194,14 +222,21 @@ Big deal — every field has to install the new `server.crt`.
 Keep the old key material for a grace period so operators can complete
 migration in their own time.
 
-### Revoking a specific peer
+### Revoking an operator
 
-Home: `scripts/tls-remove-peer.sh --identity <identity>`
+Home: `scripts/tls-remove-peer.sh --identity <callsign>`
 
-That deletes the peer's cert file, strips the interlink line, and (via
-the admin socket / iptables fallback) drops any live session for the
-identity. Effective immediately. See `docs/tls-interlink-design.md §7.3`
-for the sequence.
+That deletes the operator's cert file, strips the interlink line, and
+(via the admin socket / iptables fallback) drops the live sessions of
+all of that operator's nodes. Effective immediately. See
+`docs/tls-interlink-design.md §7.3` for the sequence.
+
+### Retiring one node
+
+Keep the key; remove that node's module letter from the `MODULES` on the
+operator's interlink line (e.g. `BCD` → `BD`). mrefd hot-reloads, and the
+node is refused on its next connect while the operator's other nodes
+carry on.
 
 ---
 

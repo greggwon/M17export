@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# tls-remove-peer.sh - Revoke a field peer.
+# tls-remove-peer.sh - Revoke an operator's key, and with it every node that
+#                      connects with that key (CALLSIGN-<any module>).
 #
 # Steps performed, in order:
 #   1. Delete the peer's cert file from the local registry.
@@ -37,13 +38,17 @@ say() { printf 'tls-remove-peer: %s\n' "$*" >&2; }
 
 usage() {
     cat <<EOF
-Usage: tls-remove-peer.sh --identity <callsign-module> [options]
+Usage: tls-remove-peer.sh --identity <callsign> [options]
 
-Revokes a field peer registration. Deletes the peer's cert, removes the
-matching interlink line, and closes any active TLS session for the peer.
+Revokes an operator's key registration. Deletes the cert, removes the
+matching interlink line, and closes any active TLS sessions for that
+operator's nodes (CALLSIGN-B, CALLSIGN-C, ...).
+
+To stop just one node but keep the operator's others, don't revoke the key:
+remove that module from the --modules list on the interlink line instead.
 
 Required:
-  --identity <string>       Peer identity, e.g. "W5GGW-B".
+  --identity <string>       Operator's bare callsign, e.g. "W5GGW".
 
 Options:
   --keep-cert               Do not delete the cert file (leave for audit).
@@ -75,10 +80,10 @@ while (( $# > 0 )); do
 done
 
 [[ -n "$IDENTITY" ]] || { usage >&2; die "--identity is required"; }
-[[ "$IDENTITY" =~ ^[A-Z0-9]+-[A-Z0-9]+$ ]] || \
-    die "identity must be uppercase alphanumeric with a single '-' (got '$IDENTITY')"
+[[ "$IDENTITY" =~ ^[A-Z0-9/]{3,}$ ]] || \
+    die "identity must be the operator's bare callsign in upper case, e.g. W5GGW (got '$IDENTITY')"
 
-DEST_CERT="${PEERS_DIR}/${IDENTITY}.pub.pem"
+DEST_CERT="${PEERS_DIR}/${IDENTITY//\//_}.pub.pem"
 
 # ---- step 1: delete cert ----------------------------------------------------
 if [[ -e "$DEST_CERT" ]]; then
@@ -157,24 +162,34 @@ cutoff_via_iptables() {
     # depends on the mrefd version; this handles both a flat "peers" list
     # (older) and a "tls_peers" list (once the fork is running).
     #
-    # We look for either "callsign" or "identity" == our IDENTITY and pull
-    # the associated address field.
-    local ip
+    # Every node using this key is named "<IDENTITY>-<module>"; collect the
+    # source address of each one.
+    local ips
     if command -v jq >/dev/null 2>&1; then
-        ip=$(jq -r --arg id "$IDENTITY" '
+        ips=$(jq -r --arg id "$IDENTITY" '
             (.tls_peers // .peers // [])[]
-            | select((.identity // .callsign) == $id)
+            | select((.identity // .callsign) | startswith($id + "-"))
             | (.ip // .addr // .source_ip // empty)
-        ' "$JSON_STATUS_PATH" 2>/dev/null | head -1)
+        ' "$JSON_STATUS_PATH" 2>/dev/null | sort -u)
     else
-        say "jq not installed; cannot parse mrefd.json for peer IP"
+        say "jq not installed; cannot parse mrefd.json for peer IPs"
         return 1
     fi
 
-    if [[ -z "$ip" ]]; then
-        say "no active session found for '${IDENTITY}' in $JSON_STATUS_PATH"
+    if [[ -z "$ips" ]]; then
+        say "no active sessions found for '${IDENTITY}-*' in $JSON_STATUS_PATH"
         return 0    # nothing to cut off is a success
     fi
+
+    local ip rc=0
+    for ip in $ips; do
+        cutoff_ip "$ip" || rc=1
+    done
+    return $rc
+}
+
+cutoff_ip() {
+    local ip="$1"
 
     say "installing iptables REJECT to drop live session from $ip"
     if (( DRY_RUN )); then

@@ -9,7 +9,7 @@
 FROM debian:12-slim AS build
 
 ARG MREFD_BUILD_DEBUG=false
-ARG MREFD_BUILD_DHT=true
+ARG MREFD_BUILD_DHT=false
 
 ENV DEBIAN_FRONTEND=noninteractive
 

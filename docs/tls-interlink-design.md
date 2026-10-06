@@ -50,29 +50,46 @@ Ordered roughly from most to least foundational.
 
 ### 2.2 Identity and cryptographic model
 
-- **Identity string:** `callsign-<module>` (e.g. `W5GGW-B`). Allows one
-  operator to run multiple field boxes simultaneously as long as each takes
-  a distinct module.
+- **The key decides who a peer is.** Each operator holds **one**
+  certificate whose Subject CN is their bare callsign (`W5GGW`). Every node
+  that operator runs presents that same certificate. The hub looks up the
+  presented key by its SPKI fingerprint; nothing the peer *says* can change
+  which callsign it is.
+- **The node chooses its module.** On each connection the node asserts the
+  single module it is linking, the same way a radio picks a module when it
+  connects to a reflector. The hub names the node `<CN>-<module>`
+  (`W5GGW-B`, `W5GGW-C`, ...), so one operator runs several field boxes at
+  once, one per module, with one certificate. The hub's registration lists
+  which modules that key may assert.
 - **Field credential:** self-signed X.509 certificate with an **Ed25519**
   keypair. Small, universally supported by modern TLS libraries, no CA
   infrastructure required.
-- **Trust model:** one-way. Field trusts the server's cert (obtained
-  out-of-band). Server authenticates the field by matching the TLS peer
-  cert's SPKI fingerprint against a keyfile named in config.
+- **Trust model:** the field trusts the server's cert (obtained
+  out-of-band, pinned). The server requires a client certificate in the
+  TLS handshake and accepts it only if its SPKI fingerprint matches a
+  registered keyfile; BIRTH must then name that key's callsign plus one
+  permitted module, signed by the same key.
 - **Server cert distribution:** out-of-band — a published cert on the
   server operator's website, on DVREF, or handed over directly. No TOFU;
   no automatic trust bootstrap.
 
 ### 2.3 Enrollment / key registry
 
-- **No web UI.** Enrollment is a config-file operation:
-  1. Field operator generates keypair and cert.
-  2. Field sends public cert to home operator (email, PR to a config repo, etc.).
-  3. Home operator drops the cert file on the server and adds the
-     `callsign-<module> ... key:<path>` line to `mrefd.interlink`.
+- **No web UI.** Enrollment is a config-file operation, once per
+  operator (not per node):
+  1. Operator generates one keypair and cert, CN = their callsign.
+  2. Operator sends the public cert to the home operator (email, PR to a
+     config repo, etc.) and copies cert + key to each of their nodes.
+  3. Home operator drops the cert file on the server and adds a
+     `CALLSIGN MODULES key:<path>` line to `mrefd.interlink`, where
+     MODULES are the modules that operator's nodes may assert.
+  4. Each node's own `mrefd.interlink` names the hub and the one module
+     that node asserts.
 - `mrefd` hot-reloads `mrefd.interlink` today; the extension retains that
   behavior for the new field.
-- Same behavior for revocation: remove line + delete keyfile.
+- Same behavior for revocation: remove line + delete keyfile, which
+  revokes every node using that key. To retire one node but keep the
+  others, drop its module from the registration's MODULES.
 
 ### 2.4 Connection lifecycle
 
@@ -163,7 +180,7 @@ are message-type specific.
 +----------------+------------------------------------------------+
 | id_len         | length of identity string in bytes (1 byte)    |
 +----------------+------------------------------------------------+
-| identity       | ASCII "callsign-<module>", e.g. "W5GGW-B"      |
+| identity       | ASCII "<cert CN>-<module>", e.g. "W5GGW-B"     |
 +----------------+------------------------------------------------+
 | timestamp_ms   | 64-bit big-endian Unix time in milliseconds    |
 +----------------+------------------------------------------------+
@@ -235,18 +252,19 @@ M17-QQQL 44.45.45.100 ABC
 New TLS forms:
 
 ```
-# Home-side (accepts incoming TLS from callsign-module W5GGW-B).
-# Identity comes from the TLS handshake; no IP or port needed.
-W5GGW-B BCD key:/etc/mrefd/certs/W5GGW-B.pub.pem
+# Home-side: register operator W5GGW's key. Any node presenting it may
+# connect asserting B, C or D, and appears as W5GGW-B / W5GGW-C / W5GGW-D.
+# The callsign must equal the cert's CN; no IP or port needed.
+W5GGW BCD key:/etc/mrefd/tls/peers/W5GGW.pub.pem
 
-# Field-side (initiates TLS out to a home reflector at that address).
-# Server cert is pinned by pointing at a local copy.
-M17-HOM BCD tls:home.example.org:17000 servercert:/etc/mrefd/home.pem
+# Field-side: dial the hub and assert ONE module (here B). The hub's
+# server cert is pinned by pointing at a local copy.
+M17-HOM B tls:home.example.org:17000 servercert:/etc/mrefd/tls/home.pem
 ```
 
 The field's own cert and private key are declared once at the reflector
-level (see §4.2), not per-peer, since a single field mrefd uses the same
-identity for every outbound TLS peer.
+level (see §4.2), not per-peer: the node's callsign comes from that cert,
+and each `tls:` line adds the module asserted on that link.
 
 ### 4.2 `mrefd.cfg` additions
 
@@ -389,7 +407,7 @@ Add a "TLS interlink" section:
     ├── client.key        # (0600)
     ├── home.pem          # pinned server cert of upstream (field mode)
     └── peers/            # home-side directory of accepted peer certs
-        ├── W5GGW-B.pub.pem
+        ├── W5GGW.pub.pem
         ├── W5GGW-C.pub.pem
         └── K7ABC-B.pub.pem
 ```
@@ -408,7 +426,7 @@ Generate a fresh Ed25519 keypair and self-signed cert. Usable in either
 role (server or client). Prints the fingerprint.
 
 ```
-scripts/tls-genkey.sh --identity W5GGW-B \
+scripts/tls-genkey.sh --identity W5GGW \
     --out ./config/tls/client
 # writes client.crt and client.key (0600)
 # prints SPKI SHA-256 fingerprint for out-of-band sharing
@@ -420,11 +438,11 @@ Register a field's public cert in the local registry and append the
 matching line to `mrefd.interlink`.
 
 ```
-scripts/tls-add-peer.sh --identity W5GGW-B \
-    --cert /path/to/W5GGW-B.pub.pem \
+scripts/tls-add-peer.sh --identity W5GGW \
+    --cert /path/to/W5GGW.pub.pem \
     --modules BCD
-# copies cert to ./config/tls/peers/W5GGW-B.pub.pem
-# appends: "W5GGW-B BCD key:/etc/mrefd/tls/peers/W5GGW-B.pub.pem"
+# copies cert to ./config/tls/peers/W5GGW.pub.pem
+# appends: "W5GGW BCD key:/etc/mrefd/tls/peers/W5GGW.pub.pem"
 # mrefd hot-reloads mrefd.interlink; new peer is immediately accepted
 ```
 
@@ -437,11 +455,11 @@ Revoke a field. Removes the interlink line, deletes the peer cert, AND
 tears down any active session for that identity.
 
 ```
-scripts/tls-remove-peer.sh --identity W5GGW-B
+scripts/tls-remove-peer.sh --identity W5GGW
 ```
 
 Steps performed, in order:
-1. Delete `./config/tls/peers/W5GGW-B.pub.pem`.
+1. Delete `./config/tls/peers/W5GGW.pub.pem`.
 2. Remove the matching line from `mrefd.interlink`.
    (mrefd's file watcher picks up both changes within seconds.)
 3. Send a signal into the mrefd container to close any live session for
@@ -509,7 +527,7 @@ it as needed.
 
 ### 8.3 Revoking a field
 
-1. Home operator: `scripts/tls-remove-peer.sh --identity W5GGW-B`.
+1. Home operator: `scripts/tls-remove-peer.sh --identity W5GGW`.
 2. mrefd hot-reloads config, admin socket closes the live session, cert
    is deleted from disk. Field's future reconnect attempts get REJECT
    reason 0x01 (Unknown identity).
@@ -565,9 +583,10 @@ Not blockers for beginning implementation, but worth capturing:
 1. **Key format on disk.** Store peer certs as PEM (`-----BEGIN CERTIFICATE-----`)
    for openssl-compatibility, or raw SPKI? PEM is the friendlier default and
    admins can inspect with `openssl x509 -text`. Recommendation: PEM.
-2. **Multiple simultaneous sessions per identity.** The design permits one
-   session per `callsign-module`. If a second connection arrives for an
-   already-connected identity, should the older one be terminated (last-write
+2. **Multiple simultaneous sessions per identity.** One certificate may
+   back several nodes at once, one per module (`W5GGW-B`, `W5GGW-C`).
+   If a second connection arrives asserting a module that is already
+   connected for that key, should the older one be terminated (last-write
    wins) or the newer one rejected? Recommendation: last-write wins with a
    log line, matching typical operator expectation after a field
    reconnect from a different network.
