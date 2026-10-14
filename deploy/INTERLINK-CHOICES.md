@@ -21,10 +21,12 @@ feeling pushed.
 
 ### TLS-authenticated interlink — added when it's worth it
 
-- Both sides trade cert files; each pins the other's cert.
+- A field node dials out to a hub. The hub registers the field
+  operator's certificate; the field node pins the hub's certificate.
 - Peer identity is tied to a keypair, not a network address.
-- Works when a peer's public IP changes (event/ARES field kits,
-  residential ISPs, CGNAT'd hosts).
+- Works when the field node's public IP changes (event/ARES field kits,
+  residential ISPs, CGNAT'd hosts). The hub needs a fixed, reachable
+  address.
 - Useful for private meshes that shouldn't appear on dvref.
 
 **Both models coexist in the same reflector.** Your `mrefd.interlink`
@@ -43,7 +45,8 @@ alone; add the TLS entry alongside.
   network) that shouldn't be listed on dvref.
 - The peer specifically wants **explicit cryptographic authentication**
   — e.g., a section coordinator running ARES infrastructure.
-- One of you sits **behind a CGNAT** that breaks inbound UDP.
+- The field side sits **behind a CGNAT** that breaks inbound UDP (it
+  dials out over TCP; the hub must still be reachable).
 
 ## When to stick with UDP
 
@@ -78,12 +81,13 @@ Common concerns and honest answers:
   (say, a field kit), that's between you and that peer — it doesn't
   affect this interlink.
 - **"DNS is spoofable, I only trust IPs."** Fair. The TLS model doesn't
-  rely on DNS for trust — server certs are pinned by fingerprint,
-  distributed out-of-band. See `CERTS.md`. But if this concern rules
+  rely on DNS for trust — the field node pins the hub's certificate,
+  distributed out-of-band and checked by fingerprint. See `CERTS.md`. But if this concern rules
   out TLS for you, use UDP.
-- **"What if I need to ban a peer?"** `iptables` still works for TLS
-  sessions exactly like it does for UDP. Ban lists and per-callsign
-  whitelist/blacklist files continue to work independently of transport.
+- **"What if I need to ban a peer?"** On a hub, revoke the operator's
+  key (`tls-remove-peer.sh`); their nodes are disconnected within
+  seconds. `iptables` still works for TLS sessions as it does for UDP,
+  and the whitelist/blacklist files work independently of transport.
 - **"This is over-engineered for what we do."** Might be. If the
   interlink you're setting up doesn't have any of the "when to propose
   TLS" reasons above, it probably is. Use UDP.
@@ -102,11 +106,16 @@ and iptables ban lists all apply per-peer independent of transport.
 | Ongoing maintenance            | None                 | Rotation policy          |
 | Works with dynamic peer IPs    | No                   | Yes                      |
 | Peer authentication            | Source IP            | Cryptographic (Ed25519)  |
-| Visible on dvref               | Yes                  | Optional                 |
+| Fixed address needed           | Both ends            | Hub only                 |
 | Requires new tooling           | No                   | `openssl` / helper script|
 | Familiar to long-time ops      | Yes                  | Not yet                  |
 | Ban-by-IP still available      | Yes                  | Yes                      |
 | Coexists with the other model  | Yes                  | Yes                      |
+
+**Slow links.** TLS links are TCP. On a link slower than about 31 kbit/s
+each way, voice breaks up (stale voice is dropped so it stays current)
+while data (packet mode) still gets through. If audio breaks up or the
+dashboard's TLS badge turns yellow or red, switch to data on that link.
 
 ---
 

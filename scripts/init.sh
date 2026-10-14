@@ -59,17 +59,22 @@ fi
 # ---- prompts ----------------------------------------------------------------
 if [[ -z "${SKIP_ENV:-}" ]]; then
     say "Reflector identity"
-    CALLSIGN=$(ask "Callsign (M17-XYZ format)" "" '^M17-[A-Z0-9]{3}$' \
-        "must be 'M17-' followed by 3 uppercase letters or digits")
-    MODULES=$(ask "Enabled modules (any subset of A-Z, e.g. BCD)" "BCD" \
-        '^[A-Z]+$' "uppercase letters only")
+    CALLSIGN=$(ask "Callsign (M17-XYZ format)" "" '^[Mm]17-[A-Za-z0-9]{3}$' \
+        "must be 'M17-' followed by 3 letters or digits")
+    CALLSIGN=$(printf '%s' "$CALLSIGN" | tr '[:lower:]' '[:upper:]')
+    MODULES=$(ask "Enabled modules (e.g. B,C,D)" "B,C,D" \
+        '^[A-Za-z][A-Za-z ,]*$' "module letters, e.g. B,C,D")
+    MODULES=$(printf '%s' "$MODULES" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z' | sed -e 's/./&,/g' -e 's/,$//')
     COUNTRY=$(ask "Country (ISO 2-letter code, e.g. US, DE, JP)" "US" \
-        '^[A-Z]{2}$' "two uppercase letters")
-    EMAIL=$(ask "Admin email" "" \
-        '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' \
+        '^[A-Za-z]{2}$' "two letters")
+    COUNTRY=$(printf '%s' "$COUNTRY" | tr '[:lower:]' '[:upper:]')
+    EMAIL=$(ask "Admin email (optional, shown on the dashboard; enter to skip)" "-" \
+        '^(-|[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+)$' \
         "must look like an email address")
-    DASH_URL=$(ask "Public dashboard URL (https://...)" "" \
-        '^https?://[^[:space:]]+$' "must start with http:// or https://")
+    [[ "$EMAIL" == "-" ]] && EMAIL=""
+    DASH_URL=$(ask "Public dashboard URL (optional, enter to skip)" "-" \
+        '^(-|https?://[^[:space:]]+)$' "must start with http:// or https://")
+    [[ "$DASH_URL" == "-" ]] && DASH_URL=""
     SPONSOR=$(ask "Sponsor / club name (optional, press enter to skip)" "-" \
         '^[^=]*$' "cannot contain '='")
     [[ "$SPONSOR" == "-" ]] && SPONSOR=""
@@ -112,7 +117,7 @@ fi
 
 # ---- config directory -------------------------------------------------------
 say "Populating ./config/"
-mkdir -p "$CFG_DIR"
+mkdir -p "$CFG_DIR" "$CFG_DIR/tls"
 
 seed_from_upstream() {
     local upstream="$1" dest="$2"
@@ -131,15 +136,14 @@ seed_from_upstream "${ROOT}/mrefd/config/mrefd.interlink" "${CFG_DIR}/mrefd.inte
 say "Done."
 cat <<NEXT
 Next steps:
-  1. (optional) Edit ./config/mrefd.interlink to peer with other reflectors.
-  2. Build the image:      make build-local     (native arch only, fastest)
-                    or:    make build           (multi-arch via buildx)
-  3. Start the reflector:  make up
-     or with dashboard:    make up-dashboard
-  4. Tail logs:            make logs
-  5. Register at https://dvref.com once your reflector is publicly reachable.
+  1. Build the image:      make build-local
+  2. Start the reflector:  make up-dashboard     (or: make up, without dashboard)
+  3. Watch it start:       make logs
+  4. To link field nodes to a hub over TLS, see "Link a field node to a
+     hub" in README.md (three commands on each side).
 
-Firewall reminder - allow inbound on the host:
-  UDP ${M17_PORT:-17000}   (M17 protocol)
-  TCP ${DASH_PORT:-8080}   (dashboard, if enabled)
+Firewall - allow inbound on the host:
+  UDP ${M17_PORT:-17000}   M17 clients and UDP peers
+  TCP ${M17_PORT:-17000}   field nodes linking in over TLS (hubs only)
+  TCP ${DASH_PORT:-8080}    dashboard, if enabled
 NEXT

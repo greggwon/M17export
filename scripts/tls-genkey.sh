@@ -1,70 +1,45 @@
 #!/bin/bash
 # =============================================================================
-# tls-genkey.sh - Generate an Ed25519 keypair + self-signed cert for use as a
-#                 TLS interlink identity (either home-server or field-client).
+# tls-genkey.sh - Make this reflector's TLS key and certificate.
 #
-# Field role: ONE certificate per operator, CN = bare callsign (W5GGW). Every
-# node that operator runs uses the same cert and asserts its own module in
-# its mrefd.interlink line, so the hub names each node CALLSIGN-MODULE.
+#   field node: one key per operator, named with your bare callsign (W5ABC).
+#               Copy it to every node you run; each node names its own
+#               module, and the hub sees it as W5ABC-B, W5ABC-C, ...
+#   hub:        one key per hub, named with the reflector's callsign (M17-HUB).
 #
-# Needs OpenSSL 1.1.1+ (Ed25519). macOS's /usr/bin/openssl is LibreSSL and
-# can't do this; install Homebrew's openssl@3 or point OPENSSL at one.
-#
-# Design: docs/tls-interlink-design.md §7.1
+# Writes <config>/tls/client.{crt,key} (field) or server.{crt,key} (hub).
+# The entrypoint finds them there; no .env settings are needed.
 # =============================================================================
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TLS_DIR="${ROOT}/config/tls"
-
-# ---- helpers ----------------------------------------------------------------
-die()  { printf 'tls-genkey: ERROR: %s\n' "$*" >&2; exit 1; }
-say()  { printf 'tls-genkey: %s\n' "$*" >&2; }
+die() { printf 'tls-genkey: ERROR: %s\n' "$*" >&2; exit 1; }
+say() { printf 'tls-genkey: %s\n' "$*" >&2; }
+. "$(dirname "${BASH_SOURCE[0]}")/tls-common.sh"
 
 usage() {
     cat <<EOF
-Usage: tls-genkey.sh --identity <callsign> [options]
+Usage: tls-genkey.sh --identity <callsign> [--role field|hub] [options]
 
-Generates an Ed25519 keypair and self-signed X.509 cert. The cert's
-Subject CN is set to the identity string; the SPKI fingerprint is
-printed for out-of-band sharing.
+  --identity <name>   field: your bare callsign, e.g. W5ABC (no module)
+                      hub:   the reflector's callsign, e.g. M17-HUB
+  --role field|hub    Default: field. ("home" is accepted for hub.)
+  --config <dir>      Reflector config directory. Default: config/ next to these scripts
+  --out <prefix>      Write <prefix>.crt / <prefix>.key instead of
+                      <config>/tls/client or <config>/tls/server.
+  --days <n>          Validity in days. Default: 3650.
+  --force             Replace an existing key.
 
-Required:
-  --identity <string>       Used as the cert's Subject CN.
-                              field: the operator's bare callsign, e.g. W5GGW
-                                     (no module - each node asserts its own)
-                              home:  the reflector's name, e.g. M17-HOM
-
-Options:
-  --out <prefix>            Output prefix. Files written are <prefix>.crt
-                            and <prefix>.key. Default: ./config/tls/client
-                            (for --role field) or ./config/tls/server
-                            (for --role home).
-  --role <field|home>       Sets the default --out prefix. Default: field.
-  --days <n>                Certificate validity in days. Default: 3650.
-  --force                   Overwrite existing files.
-
-Files created:
-  <prefix>.crt    self-signed X.509 certificate  (0644)
-  <prefix>.key    Ed25519 private key (PEM)      (0600)
-
-Output:
-  Prints the SPKI SHA-256 fingerprint (base64) to stdout.
+Prints the key's fingerprint (SPKI SHA-256, base64) for checking by phone
+or email with whoever you exchange certificates with.
 EOF
 }
 
-# ---- argument parsing -------------------------------------------------------
-IDENTITY=""
-OUT_PREFIX=""
-ROLE="field"
-DAYS=3650
-FORCE=0
-
+IDENTITY="" OUT_PREFIX="" ROLE="field" DAYS=3650 FORCE=0 CFG=""
 while (( $# > 0 )); do
     case "$1" in
-        --identity) IDENTITY="${2:?}"; shift 2 ;;
+        --identity) IDENTITY="$(upper "${2:?}")"; shift 2 ;;
         --out)      OUT_PREFIX="${2:?}"; shift 2 ;;
         --role)     ROLE="${2:?}"; shift 2 ;;
+        --config)   CFG="${2:?}"; shift 2 ;;
         --days)     DAYS="${2:?}"; shift 2 ;;
         --force)    FORCE=1; shift ;;
         -h|--help)  usage; exit 0 ;;
@@ -73,102 +48,71 @@ while (( $# > 0 )); do
 done
 
 [[ -n "$IDENTITY" ]] || { usage >&2; die "--identity is required"; }
-[[ "$ROLE" == "field" || "$ROLE" == "home" ]] || \
-    die "--role must be 'field' or 'home' (got '$ROLE')"
+case "$ROLE" in
+    field)    ;;
+    hub|home) ROLE=hub ;;
+    *)        die "--role must be 'field' or 'hub' (got '$ROLE')" ;;
+esac
 if [[ "$ROLE" == "field" ]]; then
     [[ "$IDENTITY" =~ ^[A-Z0-9/]{3,}$ ]] || \
-        die "field identity must be your bare callsign in upper case, e.g. W5GGW (got '$IDENTITY'). One cert serves all your nodes; each node names its module in mrefd.interlink."
+        die "a field key is named with your bare callsign, e.g. W5ABC (got '$IDENTITY'). One key serves all your nodes; each node names its module in mrefd.interlink."
 else
     [[ "$IDENTITY" =~ ^[A-Z0-9/-]{3,}$ ]] || \
-        die "home identity must be upper-case letters, digits, '/' or '-', e.g. M17-HOM (got '$IDENTITY')"
+        die "a hub key is named with the reflector's callsign, e.g. M17-HUB (got '$IDENTITY')"
 fi
-[[ "$DAYS" =~ ^[0-9]+$ ]] || die "--days must be an integer"
+[[ "$DAYS" =~ ^[0-9]+$ ]] || die "--days must be a number"
 
+set_config_dir "$CFG"
+find_openssl
 if [[ -z "$OUT_PREFIX" ]]; then
-    case "$ROLE" in
-        field) OUT_PREFIX="${TLS_DIR}/client" ;;
-        home)  OUT_PREFIX="${TLS_DIR}/server" ;;
-    esac
+    [[ "$ROLE" == "field" ]] && OUT_PREFIX="${TLS_DIR}/client" || OUT_PREFIX="${TLS_DIR}/server"
 fi
-
 CERT_FILE="${OUT_PREFIX}.crt"
 KEY_FILE="${OUT_PREFIX}.key"
-
-# ---- pre-flight checks ------------------------------------------------------
-OPENSSL="${OPENSSL:-openssl}"
-command -v "$OPENSSL" >/dev/null 2>&1 || die "openssl not found (set OPENSSL=/path/to/openssl)"
-if "$OPENSSL" version 2>/dev/null | grep -q LibreSSL; then
-    die "$("$OPENSSL" version) can't create Ed25519 certificates. On macOS: brew install openssl@3, then rerun with OPENSSL=\$(brew --prefix openssl@3)/bin/openssl"
-fi
-
 mkdir -p "$(dirname "$OUT_PREFIX")"
 
 if [[ -e "$CERT_FILE" || -e "$KEY_FILE" ]]; then
-    if (( FORCE )); then
-        say "overwriting existing $CERT_FILE / $KEY_FILE (--force)"
-    else
-        die "$CERT_FILE or $KEY_FILE already exists; pass --force to overwrite"
-    fi
+    (( FORCE )) || die "$CERT_FILE already exists; pass --force to replace it (everyone holding the old certificate will need the new one)"
+    say "replacing $CERT_FILE / $KEY_FILE (--force)"
 fi
 
-# ---- generate ---------------------------------------------------------------
-say "generating Ed25519 keypair for identity '${IDENTITY}' (role=${ROLE})"
-
-# Ed25519 signs itself; no digest algorithm needed on -x509.
-if ! REQ_ERR=$("$OPENSSL" req -x509 -newkey ed25519 -nodes \
-        -days "$DAYS" \
-        -subj "/CN=${IDENTITY}" \
-        -addext "subjectAltName=DNS:${IDENTITY}" \
-        -keyout "$KEY_FILE" \
-        -out    "$CERT_FILE" 2>&1); then
-    printf '%s\n' "$REQ_ERR" >&2
+if ! ERR=$("$OPENSSL" req -x509 -newkey ed25519 -nodes -days "$DAYS" \
+        -subj "/CN=${IDENTITY}" -addext "subjectAltName=DNS:${IDENTITY}" \
+        -keyout "$KEY_FILE" -out "$CERT_FILE" 2>&1); then
+    printf '%s\n' "$ERR" >&2
     die "openssl could not create the certificate"
 fi
-
 chmod 0600 "$KEY_FILE"
 chmod 0644 "$CERT_FILE"
+# The container runs mrefd as uid 1000; it must be able to read the key.
+if [[ "$(id -u)" == 0 ]]; then chown 1000:1000 "$KEY_FILE" 2>/dev/null || true; fi
 
-# ---- fingerprint ------------------------------------------------------------
-# SPKI SHA-256 fingerprint (base64) - what mrefd will match against.
-FINGERPRINT=$("$OPENSSL" x509 -in "$CERT_FILE" -pubkey -noout \
-    | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
-    | "$OPENSSL" dgst -sha256 -binary \
-    | "$OPENSSL" base64)
-
-say "cert : $CERT_FILE"
-say "key  : $KEY_FILE  (0600, keep private)"
-say "identity fingerprint (SPKI SHA-256 base64):"
+FINGERPRINT=$(spki_fingerprint "$CERT_FILE")
+say "certificate: $CERT_FILE"
+say "private key: $KEY_FILE  (keep it private; never send it)"
 printf '%s\n' "$FINGERPRINT"
 
-case "$ROLE" in
-  field)
+if [[ "$ROLE" == "field" ]]; then
     cat >&2 <<NEXT
 
-Copy this same cert + key to every node you run. Each node picks its
-module in its own mrefd.interlink, e.g. for module B:
-  M17-HOM  B  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
-and is known at the hub as ${IDENTITY}-B.
-
-Send $CERT_FILE (the .crt only, NOT the .key) to the hub's operator,
-along with:
-  - callsign:    ${IDENTITY}
-  - fingerprint: ${FINGERPRINT}
-  - the modules your nodes will use
-
-Hub operator registers it once, for all your nodes:
-  scripts/tls-add-peer.sh --identity ${IDENTITY} \\
-      --cert <path-to-received.crt> --modules <BCD-etc>
+Next:
+  1. Send $CERT_FILE (not the .key) to the hub's operator, with your
+     callsign and the modules your nodes will use. Read them the
+     fingerprint above so they can check it arrived intact.
+  2. They send you their hub certificate. Then on this node:
+       scripts/tls-add-hub.sh --hub M17-HUB --host hub.example.org \\
+           --module B --cert <their-hub.crt>
+  3. Restart this node. Every node you run uses this same key; copy the
+     whole config/tls directory to each one.
 NEXT
-    ;;
-  home)
+else
     cat >&2 <<NEXT
 
-Next: publish $CERT_FILE (the .crt only, NOT the .key) so field
-operators can pin your identity. Anywhere your field ops can retrieve
-it out-of-band is fine (your website, DVREF, direct handoff).
-
-Publish this fingerprint alongside it for verification:
-  ${FINGERPRINT}
+Next:
+  1. Give $CERT_FILE (not the .key) and the fingerprint above to the
+     operators whose nodes will link here.
+  2. Register each operator's certificate when it arrives:
+       scripts/tls-add-peer.sh --cert <their.crt> --modules B,C
+     mrefd picks it up within seconds; no restart needed.
 NEXT
-    ;;
-esac
+fi

@@ -75,7 +75,9 @@ build: buildx-setup submodules ## Multi-arch build for BUILD_PLATFORMS (loads lo
 	@echo "      local docker for immediate 'make up'."
 
 build-local: submodules build-mrefd build-dashboard   ## Native arch, loaded into local docker
-	@echo "==> local images ready"
+	docker tag $(IMAGE_MREFD) $(IMAGE):local
+	docker tag $(IMAGE_MREFD) $(IMAGE):$(IMAGE_TAG)
+	@echo "==> local images ready: $(IMAGE_MREFD) (also $(IMAGE):local), $(IMAGE_DASHBOARD)"
 
 #################################################################################################
 #
@@ -94,7 +96,7 @@ IMAGE         := ghcr.io/greggwon/mrefd
 PLATFORMS     := linux/386,linux/amd64,linux/arm64,linux/arm/v7
 MY_BUILD      := $(shell date -u '+%H%M%S')-$(BUILD_SHA)
 
-.PHONY: build-release build-test build-local create-builder show-version
+.PHONY: build-release build-test create-builder show-version
 
 show-version:
 	@echo "release: $(IMAGE):latest + $(IMAGE):$(IMAGE_TAG)-$(MY_BUILD)"
@@ -122,14 +124,6 @@ build-test: create-builder
 		--tag $(IMAGE):test-$(IMAGE_TAG) \
 		--push .
 	docker pull $(IMAGE):test-$(IMAGE_TAG)
-
-build-local:
-	docker build \
-		--file docker/mrefd/Dockerfile \
-		--tag $(IMAGE):local \
-		--tag $(IMAGE):build-$(MY_BUILD) \
-		--tag $(IMAGE):$(IMAGE_TAG) \
-		.
 
 create-builder:
 	@docker buildx inspect m17-builder >/dev/null 2>&1 || \
@@ -169,7 +163,7 @@ restart:                       ## Restart mrefd (picks up .env changes)
 	$(COMPOSE) --profile dashboard restart
 
 logs:                          ## Follow logs for all services
-$(COMPOSE) --profile dashboard logs -f --tail=200
+	$(COMPOSE) --profile dashboard logs -f --tail=200
 
 logs-mrefd:
 	$(COMPOSE) logs -f --tail=200 mrefd
@@ -183,8 +177,10 @@ shell:                         ## Shell inside the mrefd container
 shell-dashboard:
 	$(COMPOSE) exec dashboard bash
 
-status ps:                     ## Show container status
+status:                        ## Show container status
 	$(COMPOSE) --profile dashboard ps
+
+ps: status
 
 # ---- cleanup ----------------------------------------------------------------
 

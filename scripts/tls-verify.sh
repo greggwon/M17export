@@ -1,184 +1,150 @@
 #!/bin/bash
 # =============================================================================
-# tls-verify.sh - Diagnostic: attempt a TLS connection against a running mrefd
-#   TLS listener and report the outcome of each stage.
+# tls-verify.sh - On a field node: check that a hub is reachable and is the
+#   hub you expect, before (or instead of) reading mrefd's log.
 #
-# Reports:
-#   1. TCP connect - can we reach the port at all?
-#   2. TLS handshake - does the server present a cert, negotiate ciphers?
-#   3. Server cert fingerprint match (if --expect-fingerprint given).
-#   4. Server cert Subject CN.
-#   5. Client cert presentation (if --client-cert given, informational only
-#      here since mrefd's BIRTH exchange is a post-handshake application-layer
-#      protocol; openssl s_client can't drive it).
-#
-# NOTE: this script does not exercise the M17 BIRTH message flow itself.
-# That requires the mrefd binary to be built with TLS support. Once the
-# reference implementation lands, this script gains an --exercise-birth
-# flag that drives a full handshake through mrefd's own tools.
-#
-# Design: docs/tls-interlink-design.md §7.6
+# For each hub (every tls: line in mrefd.interlink, or the one given with
+# --host) it checks:
+#   1. TCP connect   - is the port reachable through every firewall?
+#   2. TLS handshake - presenting this node's key, as mrefd does
+#   3. Hub identity  - does the hub's key match the pinned certificate
+#                      (or --expect-fingerprint)?
+# Whether the hub has registered *your* key and module is decided after the
+# handshake; mrefd's log says that ("hub rejected us: ...").
 # =============================================================================
 set -euo pipefail
-
-# ---- helpers ----------------------------------------------------------------
 die()  { printf 'tls-verify: ERROR: %s\n' "$*" >&2; exit 2; }
 say()  { printf 'tls-verify: %s\n' "$*" >&2; }
-pass() { printf '  \033[32mPASS\033[0m  %s\n' "$*" >&2; }
-fail() { printf '  \033[31mFAIL\033[0m  %s\n' "$*" >&2; FAILED=1; }
-info() { printf '  \033[34mINFO\033[0m  %s\n' "$*" >&2; }
+pass() { printf '  PASS  %s\n' "$*" >&2; }
+fail() { printf '  FAIL  %s\n' "$*" >&2; FAILED=1; }
+info() { printf '  INFO  %s\n' "$*" >&2; }
+. "$(dirname "${BASH_SOURCE[0]}")/tls-common.sh"
 
 usage() {
     cat <<EOF
-Usage: tls-verify.sh --host <hostname-or-ip> [options]
+Usage: tls-verify.sh [options]
 
-Diagnostic TLS handshake against a running mrefd TLS listener. Reports the
-outcome of each stage (TCP, TLS, cert match).
+With no options, checks every hub this node links to (its tls: lines).
 
-Required:
-  --host <string>              Target reflector host or IP.
+  --host <name[:port]>         Check this hub instead.
+  --cert <hub.crt>             Its certificate, to check its identity against.
+  --expect-fingerprint <b64>   Or its fingerprint (as tls-genkey printed it).
+  --config <dir>               Reflector config directory. Default: the
+                               config/ next to these scripts.
+  --timeout <sec>              Per-check timeout. Default: 10.
 
-Options:
-  --port <n>                   TCP port. Default: 17000.
-  --client-cert <path>         Present this client cert during the handshake
-                               (informational; mrefd auth happens at the
-                               post-handshake BIRTH message).
-  --client-key <path>          Private key matching --client-cert.
-  --expect-fingerprint <b64>   Verify the server cert's SPKI SHA-256
-                               fingerprint matches this value (base64).
-  --timeout <sec>              Handshake timeout. Default: 5.
-
-Exit codes:
-  0   All checks passed.
-  1   At least one check failed.
-  2   Usage error or missing tool.
+Exit: 0 all checks passed, 1 a check failed, 2 usage error.
 EOF
 }
 
-# ---- argument parsing -------------------------------------------------------
-HOST=""
-PORT=17000
-CCERT=""
-CKEY=""
-EXPECT_FP=""
-TIMEOUT=5
-FAILED=0
-
+HOST="" PIN_CERT="" EXPECT_FP="" CFG="" TIMEOUT=10 FAILED=0
 while (( $# > 0 )); do
     case "$1" in
-        --host)                HOST="${2:?}"; shift 2 ;;
-        --port)                PORT="${2:?}"; shift 2 ;;
-        --client-cert)         CCERT="${2:?}"; shift 2 ;;
-        --client-key)          CKEY="${2:?}"; shift 2 ;;
-        --expect-fingerprint)  EXPECT_FP="${2:?}"; shift 2 ;;
-        --timeout)             TIMEOUT="${2:?}"; shift 2 ;;
-        -h|--help)             usage; exit 0 ;;
-        *)                     die "unknown argument: $1  (try --help)" ;;
+        --host)               HOST="${2:?}"; shift 2 ;;
+        --port)               HOST="${HOST%%:*}:${2:?}"; shift 2 ;;
+        --cert)               PIN_CERT="${2:?}"; shift 2 ;;
+        --expect-fingerprint) EXPECT_FP="${2:?}"; shift 2 ;;
+        --config)             CFG="${2:?}"; shift 2 ;;
+        --timeout)            TIMEOUT="${2:?}"; shift 2 ;;
+        -h|--help)            usage; exit 0 ;;
+        *)                    die "unknown argument: $1  (try --help)" ;;
     esac
 done
+set_config_dir "$CFG"
+find_openssl
 
-[[ -n "$HOST" ]] || { usage >&2; die "--host is required"; }
-command -v openssl >/dev/null 2>&1 || die "openssl not found in PATH"
-
-if [[ -n "$CCERT" && -z "$CKEY" ]] || [[ -z "$CCERT" && -n "$CKEY" ]]; then
-    die "--client-cert and --client-key must be given together"
-fi
-
-say "target: ${HOST}:${PORT} (timeout=${TIMEOUT}s)"
-
-# ---- stage 1: TCP connect ---------------------------------------------------
-# Use bash's /dev/tcp for a portable port check.
-if (exec 3<>/dev/tcp/"${HOST}"/"${PORT}") 2>/dev/null; then
-    pass "TCP connect to ${HOST}:${PORT}"
-    exec 3>&- 3<&-
+# This node's key, presented the way mrefd presents it; the hub won't
+# complete a handshake without one.
+CCERT="${TLS_DIR}/client.crt" CKEY="${TLS_DIR}/client.key"
+CLIENT_ARGS=()
+if [[ -r "$CCERT" && -r "$CKEY" ]]; then
+    CLIENT_ARGS=(-cert "$CCERT" -key "$CKEY")
 else
-    fail "TCP connect to ${HOST}:${PORT} (no route / port closed / filtered)"
-    exit 1
+    say "no field key at $CCERT; the hub will refuse the handshake (make one with tls-genkey.sh)"
 fi
 
-# ---- stage 2: TLS handshake -------------------------------------------------
-SCLIENT_LOG=$(mktemp)
-trap 'rm -f "$SCLIENT_LOG"' EXIT
+# run_with_timeout <seconds> <cmd...> - portable (macOS has no timeout(1)).
+run_with_timeout() {
+    local t="$1"; shift
+    "$@" & local pid=$!
+    ( sleep "$t" && kill "$pid" 2>/dev/null ) & local killer=$!
+    local rc=0
+    wait "$pid" 2>/dev/null || rc=$?
+    kill "$killer" 2>/dev/null || true
+    wait "$killer" 2>/dev/null || true
+    return $rc
+}
 
-SCLIENT_ARGS=(
-    -connect "${HOST}:${PORT}"
-    -servername "${HOST}"
-    -verify_return_error
-    -brief
-)
-if [[ -n "$CCERT" ]]; then
-    SCLIENT_ARGS+=(-cert "$CCERT" -key "$CKEY")
-fi
+# check_hub <label> <host:port> <pinned cert or ""> <expected fp or "">
+check_hub() {
+    local label="$1" target="$2" pin="$3" want="$4"
+    local host="${target%:*}" port="${target##*:}"
+    say "${label}: ${host}:${port}"
 
-# Feed empty input so s_client tears down cleanly after handshake.
-# Timeout via a small shell wrapper; -brief keeps stderr low-volume.
-if : | openssl s_client "${SCLIENT_ARGS[@]}" > "$SCLIENT_LOG" 2>&1 \
-     & SPID=$!
-   # give it TIMEOUT seconds to complete
-   ( sleep "$TIMEOUT" && kill "$SPID" 2>/dev/null ) & TPID=$!
-   wait "$SPID" 2>/dev/null
-   RC=$?
-   kill "$TPID" 2>/dev/null || true
-   wait "$TPID" 2>/dev/null || true
-   [[ $RC -eq 0 ]]
-then
-    pass "TLS handshake succeeded"
-else
-    fail "TLS handshake failed (exit=$RC). openssl s_client output:"
-    sed 's/^/        /' "$SCLIENT_LOG" >&2
-    exit 1
-fi
-
-# ---- stage 3: server cert details -------------------------------------------
-CERT_PEM=$(mktemp)
-trap 'rm -f "$SCLIENT_LOG" "$CERT_PEM"' EXIT
-
-: | openssl s_client -connect "${HOST}:${PORT}" -servername "${HOST}" \
-        -showcerts 2>/dev/null \
-        | openssl x509 -outform PEM > "$CERT_PEM" 2>/dev/null || true
-
-if [[ ! -s "$CERT_PEM" ]]; then
-    fail "could not extract server cert from handshake"
-    exit 1
-fi
-
-SUBJECT=$(openssl x509 -in "$CERT_PEM" -noout -subject 2>/dev/null | sed 's/^subject=//')
-info "server subject: ${SUBJECT}"
-
-SERVER_FP=$(openssl x509 -in "$CERT_PEM" -pubkey -noout \
-    | openssl pkey -pubin -outform DER 2>/dev/null \
-    | openssl dgst -sha256 -binary \
-    | openssl base64)
-info "server SPKI SHA-256: ${SERVER_FP}"
-
-if [[ -n "$EXPECT_FP" ]]; then
-    if [[ "$SERVER_FP" == "$EXPECT_FP" ]]; then
-        pass "server fingerprint matches expected value"
+    if run_with_timeout "$TIMEOUT" bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+        pass "TCP connect"
     else
-        fail "server fingerprint MISMATCH"
-        info "  expected: ${EXPECT_FP}"
-        info "  got:      ${SERVER_FP}"
+        fail "TCP connect (DNS, routing, or TCP ${port} not open inbound on the hub)"
+        return
     fi
-fi
 
-# ---- stage 4: client cert (informational) -----------------------------------
-if [[ -n "$CCERT" ]]; then
-    CCN=$(openssl x509 -in "$CCERT" -noout -subject 2>/dev/null | sed -E 's/.*CN=([^,]+).*/\1/')
-    CFP=$(openssl x509 -in "$CCERT" -pubkey -noout \
-        | openssl pkey -pubin -outform DER 2>/dev/null \
-        | openssl dgst -sha256 -binary \
-        | openssl base64)
-    info "client cert Subject CN: ${CCN}"
-    info "client SPKI SHA-256:    ${CFP}"
-    info "(mrefd BIRTH exchange happens after handshake and is not"
-    info " exercised by this script; use mrefd's own client to test"
-    info " end-to-end auth once the TLS reference implementation lands)"
+    local log cert
+    log=$(mktemp); cert=$(mktemp)
+    : | run_with_timeout "$TIMEOUT" "$OPENSSL" s_client -connect "${host}:${port}" \
+            -servername "$host" -showcerts "${CLIENT_ARGS[@]+"${CLIENT_ARGS[@]}"}" > "$log" 2>&1 || true
+    "$OPENSSL" x509 -outform PEM < "$log" > "$cert" 2>/dev/null || true
+    if [[ ! -s "$cert" ]]; then
+        fail "TLS handshake (is this an M17export hub on that port?)"
+        sed -n '1,8s/^/        /p' "$log" >&2
+        rm -f "$log" "$cert"; return
+    fi
+    if grep -qi "alert\|handshake failure" "$log"; then
+        fail "TLS handshake: the hub refused this node's key at the TLS layer"
+    else
+        pass "TLS handshake"
+    fi
+
+    local got cn
+    got=$(spki_fingerprint "$cert")
+    cn=$(cert_cn "$cert")
+    info "hub certificate: ${cn}, fingerprint ${got}"
+    if [[ -z "$want" && -n "$pin" && -r "$pin" ]]; then
+        want=$(spki_fingerprint "$pin")
+    fi
+    if [[ -z "$want" ]]; then
+        info "nothing to compare its identity with (give --cert or --expect-fingerprint)"
+    elif [[ "$got" == "$want" ]]; then
+        pass "hub identity matches ${pin:-the expected fingerprint}"
+    else
+        fail "hub identity does NOT match: expected ${want}. The hub's key changed (get its new certificate and rerun tls-add-hub.sh) or this isn't the right hub"
+    fi
+    rm -f "$log" "$cert"
+}
+
+if [[ -n "$HOST" ]]; then
+    [[ "$HOST" == *:* ]] || HOST="${HOST}:17000"
+    check_hub "hub" "$HOST" "$PIN_CERT" "$EXPECT_FP"
+else
+    [[ -f "$INTERLINK" ]] || die "no $INTERLINK; give --host"
+    n=0
+    while read -r hub target pin; do
+        # mrefd.interlink names the container path; find the file on this host.
+        [[ -n "$pin" ]] && pin="${TLS_DIR}/${pin#"$CONTAINER_TLS_DIR"/}"
+        check_hub "$hub" "$target" "$pin" ""
+        n=$((n + 1))
+    done < <(awk '{
+            t = ""; p = ""
+            for (i = 2; i <= NF; i++) {
+                if ($i ~ /^tls:/) t = substr($i, 5)
+                if ($i ~ /^servercert:/) p = substr($i, 12)
+            }
+            if (t != "") { if (t !~ /:[0-9]+$/) t = t ":17000"; print toupper($1), t, p }
+        }' "$INTERLINK")
+    (( n > 0 )) || die "no tls: lines in $INTERLINK; give --host"
 fi
 
 if (( FAILED )); then
     say "one or more checks failed"
     exit 1
 fi
-
 say "all checks passed"
-exit 0

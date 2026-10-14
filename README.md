@@ -1,103 +1,279 @@
-# M17 Reflector — Containerized `mrefd`
+# M17export — containerized M17 reflectors, with field-to-hub TLS links
 
-This project packages [`mrefd`](https://github.com/n7tae/mrefd) — the reference
-M17 open-source reflector daemon — as a parameterized, multi-architecture
-Docker deployment. The goal is to reduce the effort of standing up an M17
-reflector from "install a toolchain, build OpenDHT, hand-edit systemd,
-configure lighttpd + PHP" down to "fill in a form, run one `make`".
-
-The primary deployment target is a small always-on Linux computer (Raspberry
-Pi 3/4/5, Zero 2W, a NUC, an old ThinkPad in a closet, or any Linux VPS).
-IPv4 and IPv6 are equal-footing deployment paths — the default networking
-model avoids NAT entirely so real dual-stack traffic reaches the reflector.
-
-M17export builds mrefd **without Ham-DHT**. Field nodes reach the wider
-network only through their TLS link to a hub and are never published; hubs
-interlink using static addresses or TLS. Anyone who wants stock DHT
-behaviour can build upstream `mrefd`.
+This project packages [`mrefd`](https://github.com/n7tae/mrefd), the M17
+reflector daemon, as a Docker image for a Raspberry Pi, a mini-PC or a VPS,
+plus a web dashboard. It adds one thing upstream mrefd doesn't have: a
+**field node** on a changing or NATed uplink (a go-kit, a vehicle, an event
+site) can hold an authenticated TLS link to a **hub** reflector at a fixed
+address, so its users are on the wider M17 network wherever it is.
 
 ---
 
-> **Full operator manual:** open [`docs/index.html`](docs/index.html) in a
-> browser for the complete setup guide, field-to-hub relay walkthrough, and
-> mDNS discovery reference.
+## Status
 
-## Contents
+**Works, and tested end to end** (hub and field containers, including
+simulated slow, high-latency uplinks):
 
-1. [Why this project exists](#why-this-project-exists)
-2. [What you get](#what-you-get)
-3. [Repository layout](#repository-layout)
-4. [Prerequisites](#prerequisites)
-5. [Quickstart](#quickstart)
-6. [Networking model (IPv4 + IPv6)](#networking-model-ipv4--ipv6)
-7. [Bonjour / mDNS discovery](#bonjour--mdns-discovery)
-8. [Ports & firewall](#ports--firewall)
-9. [Configuration reference](#configuration-reference)
-10. [Interlinking and DVREF](#interlinking-and-dvref)
-11. [Multi-architecture image builds](#multi-architecture-image-builds)
-12. [Upstream patch posture](#upstream-patch-posture)
-13. [Operational lifecycle](#operational-lifecycle)
-14. [Updating](#updating)
-15. [Troubleshooting](#troubleshooting)
-16. [Related sibling app: MSeven](#related-sibling-app-mseven)
-17. [Credits & license](#credits--license)
+- **TLS field-to-hub links:** voice and data both ways. The link survives
+  the field node changing address, notices a dead link through TCP
+  keepalive, and shuts down cleanly. Hubs refuse keys they don't know.
+- **Key management:** a script for each step (`scripts/tls-*.sh`, also
+  inside the image). Registering, changing or revoking an operator's key
+  on a hub takes effect within seconds, with no restart.
+- **Watching links:** clear `link UP` / `link DOWN` log lines with the
+  reason, a **TLS Links** dashboard page, and a status badge on every
+  page.
+- **Slow links:** voice is kept current rather than queued, and data still
+  gets through when voice can't. See
+  [Slow links: voice or data](#slow-links-voice-or-data).
+- **mDNS / Bonjour advertisement** (`_m17._udp`), on by default, so MSeven
+  and other clients find a reflector on the local network.
+
+**Not decided yet:** whether hubs also publish on Ham-DHT. Field nodes run
+without it. Both builds work (`MREFD_BUILD_DHT=false`, the default, or
+`true`).
+
+**Not done:**
+- **IPv6 address literals in `tls:` lines.** Use a DNS name instead.
+- **Changing a field node's hub line takes a restart.** Hub-side changes
+  apply live.
+
+## Which document to read
+
+| You want to… | Read |
+|---|---|
+| Run a reflector, or link a field node to a hub | this README (below) |
+| Deploy from the published image without the source | [`deploy/README.md`](deploy/README.md) |
+| Look something up about TLS keys and certificates | [`deploy/CERTS.md`](deploy/CERTS.md) |
+| Decide between plain UDP peering and TLS for a link | [`deploy/INTERLINK-CHOICES.md`](deploy/INTERLINK-CHOICES.md) |
+| Read the long-form operator manual (mDNS in depth, field kits) | [`docs/index.html`](docs/index.html) |
+| Understand the TLS link protocol as built | [`docs/tls-interlink-design.md`](docs/tls-interlink-design.md) |
+| Build or publish your own image | [`deploy/BUILD.md`](deploy/BUILD.md) |
+
+---
+
+## Quickstart: run a reflector
+
+On a Linux host with Docker
+([prerequisites](#prerequisites)):
+
+```bash
+git clone --recurse-submodules https://github.com/greggwon/M17export.git
+cd M17export
+make init            # asks for the callsign (M17-XYZ), modules (B,C,D), ports
+make build-local     # builds the images for this machine
+make up-dashboard    # starts the reflector and the dashboard
+make logs            # watch it start: "Reflector M17-XYZ started and listening"
+```
+
+The dashboard is at `http://<host>:8080/`. Open **UDP 17000** inbound on
+the firewall (and **TCP 17000** if this will be a hub). Settings live in
+`.env`; after changing them, run `make restart`.
+
+---
+
+## Link a field node to a hub
+
+A **hub** has a fixed address and accepts field nodes. A **field node**
+dials out to the hub from wherever it is, so its own address doesn't
+matter. They trust each other through certificates exchanged once:
+
+- The hub has one key.
+- Each field **operator** has one key, used by all of that operator's
+  nodes.
+- Each node links one module, and the hub names it after the operator's
+  callsign and that module, e.g. `W5ABC-B`.
+
+Run the commands from the M17export directory on each machine. They
+work on Linux, and on macOS with `brew install openssl@3`. Or run them
+from the image with no tools installed; see
+[`deploy/CERTS.md`](deploy/CERTS.md).
+
+**On the hub, once:**
+
+```bash
+scripts/tls-genkey.sh --role hub --identity M17-HUB
+```
+
+This prints a fingerprint. Give `config/tls/server.crt` and the
+fingerprint to the field operators. Make sure **TCP 17000** is open
+inbound.
+
+**Each field operator, once:**
+
+```bash
+scripts/tls-genkey.sh --identity W5ABC
+```
+
+Send `config/tls/client.crt` (**never the `.key`**) to the hub operator,
+with the modules you want and the fingerprint it printed. If you run
+several nodes, copy the whole `config/tls/` directory to each of them.
+
+**On the hub, for each operator:**
+
+```bash
+scripts/tls-add-peer.sh --cert W5ABC.crt --modules B,C
+```
+
+The hub applies this within seconds; no restart. Read the printed
+fingerprint back to the operator to confirm the file arrived intact.
+
+**On each field node:**
+
+```bash
+scripts/tls-add-hub.sh --hub M17-HUB --host hub.example.org --module B --cert M17-HUB.crt
+make restart
+```
+
+**Check it:** `make logs` shows
+`link UP: to 'M17-HUB' ... as 'W5ABC-B'` on the field node, and
+`link UP: node 'W5ABC-B'` on the hub. Both dashboards show it on the
+**TLS Links** page, and `scripts/tls-list-peers.sh` lists it on either
+side.
+
+**Later:**
+
+| To… | Run (on the hub unless noted) |
+|---|---|
+| Change which modules an operator may use | `scripts/tls-add-peer.sh --cert W5ABC.crt --modules C` (drops their node on B) |
+| Revoke an operator | `scripts/tls-remove-peer.sh --identity W5ABC` (drops all their nodes at once) |
+| See who's registered and connected | `scripts/tls-list-peers.sh` |
+| Check from a field node that the hub is reachable and genuine | `scripts/tls-verify.sh --host hub.example.org` |
+| Replace the hub's key | `scripts/tls-rotate-server-cert.sh --identity M17-HUB`, then every field operator reruns `tls-add-hub.sh` with the new cert |
+
+If the link doesn't come up, the field node's log says why. For example,
+"hub rejected us: our key isn't registered there" means the hub operator
+still needs to run `tls-add-peer.sh` with your key. Other messages and
+fixes are under [Troubleshooting](#troubleshooting).
+
+---
+
+## Watching links
+
+- **Dashboard.** Every page has a TLS badge:
+
+  | Colour | Meaning |
+  |---|---|
+  | Green | Links up |
+  | Yellow | Voice falling behind (delay growing) |
+  | Red | A link is down, or voice can't keep up (use data) |
+  | Grey | Waiting for nodes |
+
+  The **TLS Links** page shows, for each link:
+  - its state, and how long it has been in that state;
+  - its address;
+  - frames in and out;
+  - voice delay, with whether it's steady or growing;
+  - stale voice dropped;
+  - the last problem.
+- **Logs** (`make logs`):
+  - `link UP` and `link DOWN` lines say how long the link was up, why it
+    went down (keepalive timeout, peer reset, peer sent DISCONNECT, hub
+    rejected us, and so on) and the frame counts.
+  - While a link is down, the reconnect attempts are logged, with how
+    long it has been down.
+- **`scripts/tls-list-peers.sh`** prints the same picture in a terminal.
+
+## Slow links: voice or data
+
+This is radio: audio must stay *current*, not arrive complete and late.
+
+- **What gets dropped.** Each link drops voice that has waited more than
+  200 ms to go out (`MREFD_TLS_MAX_AUDIO_MS`), so listeners hear the
+  present. Data (packet mode) is never dropped for age.
+- **Delay alone is fine.** A long but steady delay, such as a satellite
+  hop, stays green. Only a link slower than the voice causes drops.
+- **Voice needs about 31 kbit/s each way.** Each M17 voice frame grows from
+  61 to about 150 bytes once TLS, TCP and IP headers are added.
+- **When voice breaks up, switch to data.** Signs that a link can't carry
+  voice are:
+  - broken audio;
+  - a yellow or red badge;
+  - "can't keep up with voice" in the log.
+
+  Data still gets through on that link.
+
+Voice delivered in testing, over a simulated uplink:
+
+| Uplink | Voice delivered |
+|---|---|
+| 64 kbit/s, 300 ms | 100% |
+| 48 kbit/s, 600 ms | 99–100% |
+| 40 kbit/s, 600 ms | 100% |
+| 24 kbit/s, 600 ms | ~75% |
+| 12 kbit/s, 300 ms | ~55–60% |
+| 8 kbit/s, 600 ms | ~40% |
+
+Data was tested on the 24, 12 and 8 kbit/s links and got through
+complete on all three.
+
+Field nodes never give up connecting: TCP retries run their full course
+over slow or lossy links, then the node retries on its own. Keepalives
+notice a link that silently died in about 5 minutes
+(`MREFD_TLS_KEEPALIVE`; see [TLS interlink settings](#tls-interlink)).
+
+---
+
+## Reference
+
+- [Why this project exists](#why-this-project-exists)
+- [What you get](#what-you-get)
+- [Repository layout](#repository-layout)
+- [Prerequisites](#prerequisites)
+- [Networking model (IPv4 + IPv6)](#networking-model-ipv4--ipv6)
+- [Bonjour / mDNS discovery](#bonjour--mdns-discovery)
+- [Ports & firewall](#ports--firewall)
+- [Configuration reference](#configuration-reference)
+- [Interlinking and DVREF](#interlinking-and-dvref)
+- [Multi-architecture image builds](#multi-architecture-image-builds)
+- [Upstream patch posture](#upstream-patch-posture)
+- [Operational lifecycle](#operational-lifecycle)
+- [Updating](#updating)
+- [Troubleshooting](#troubleshooting)
+- [Related sibling app: MSeven](#related-sibling-app-mseven)
+- [Credits & license](#credits--license)
 
 ---
 
 ## Why this project exists
 
-**M17** is a fully open digital-voice protocol for amateur radio — free of the
-patent-encumbered codecs (AMBE) that gate DMR / D-STAR / YSF. Its long-term
-value depends on network *reachability*: the more repeaters, hot-spots, and
-reflectors are on the air, the more the mode gets used.
+**M17** is a fully open digital-voice protocol for amateur radio. It is
+free of the patent-encumbered codecs (AMBE) that gate DMR, D-STAR and YSF.
+Its value grows with reachability: the more repeaters, hotspots and
+reflectors there are on the air, the more the mode gets used.
 
-The blocker isn't the protocol; it's the operational overhead. Standing up a
-real M17 reflector today means installing a modern C++17 toolchain, building
-or installing OpenDHT (the DHT library used for peer discovery), writing
-systemd units, configuring lighttpd + PHP for the dashboard, and getting the
-firewall right on both IPv4 and IPv6. For an operator who just wants to
-export a DMR talkgroup or D-STAR reflector into M17 through
-[`mrefd`](https://dvref.com), that overhead is a much bigger barrier than the
-radio side of it.
+The barrier is setup, not the protocol. Running an M17 reflector by hand
+means:
 
-**Containerization collapses that setup into a wizard and a `make up`.** Once
-the operator has Docker on any Linux box they already own, this repo turns
-their reflector into a reproducible, upgradable, arch-portable service.
-That's what unlocks the population of "casual" M17 reflectors that the
-network needs to grow.
+- installing a C++17 toolchain;
+- building OpenDHT;
+- writing systemd units;
+- configuring lighttpd and PHP for the dashboard;
+- getting the firewall right for IPv4 and IPv6.
 
-The dashboards at [dvref.com](https://dvref.com) list a mix of MREFD and URFD
-reflectors already interlinked into the M17 ecosystem — this project is aimed
-squarely at making it easy to add another one.
+This repo turns all of that into a wizard and `make up`.
 
 ---
 
 ## What you get
 
-- **A multi-arch Docker image** for `mrefd`, built once and deployable on
-  `linux/arm64` (Pi 4/5, Zero 2W 64-bit), `linux/arm/v7` (Pi 3, Zero 2W
-  32-bit), and `linux/amd64` (x86_64 servers, mini-PCs).
-- **A companion image** running the upstream PHP dashboard behind `lighttpd`.
-- **Complete parameterization through a single `.env` file.** Every knob
-  exposed by `mrefd.mk` (build-time) and `mrefd.cfg` (run-time), plus the PHP
-  dashboard's `config.inc.php`, is an environment variable with a comment
-  explaining what it does.
-- **An entrypoint script** that renders `mrefd.cfg` from those env vars at
-  container start, validates required fields, and refuses to start with
-  placeholder values.
-- **An interactive wizard** (`make init`) that prompts for the required
-  identity/network fields and seeds a working `./config/` directory.
-- **Compose profiles** so the dashboard is opt-in (`make up` for headless,
-  `make up-dashboard` to add it).
-- **Live-editable list files** — `mrefd.whitelist`, `mrefd.blacklist`, and
-  `mrefd.interlink` bind-mount from a host directory so `mrefd`'s built-in
-  file watcher picks up changes within seconds without a restart.
-- **First-class IPv6 support**, including default deployment via
-  `network_mode: host` on Linux so real dual-stack traffic reaches `mrefd`
-  without any NAT rewriting, and a bridge-mode override for hosts that can't
-  do host networking.
-- **A build-time patch** for a real bug in upstream `mrefd/users.cpp`
-  (documented in [Upstream patch posture](#upstream-patch-posture) below).
+- **Images for several architectures:** a `mrefd` image for `linux/arm64`,
+  `linux/arm/v7` and `linux/amd64`, plus a dashboard image (lighttpd +
+  PHP).
+- **One `.env` file for every setting,** each with a comment. The
+  entrypoint turns it into `mrefd.cfg` when the container starts.
+- **Optional dashboard:** `make up` runs headless, `make up-dashboard`
+  adds the dashboard.
+- **List files you can edit live:** `mrefd.whitelist`, `mrefd.blacklist`
+  and `mrefd.interlink` live in `config/`, and mrefd picks up edits within
+  seconds.
+- **Real dual-stack networking:** host networking on Linux, so IPv6 and
+  IPv4 reach mrefd without NAT. There is a bridge-mode override for hosts
+  that can't use host networking.
+- **TLS field-to-hub links,** the key-management scripts, and dashboard
+  status for them.
+- **A fix for an upstream bug** in `mrefd/users.cpp`, applied at build
+  time (see [Upstream patch posture](#upstream-patch-posture)).
 
 ---
 
@@ -105,25 +281,23 @@ squarely at making it easy to add another one.
 
 ```
 .
-├── Makefile                    # top-level wrapper - `make help`
+├── Makefile                    # `make help`
 ├── docker-compose.yml          # mrefd (host network) + dashboard (bridge, dual-stack)
 ├── docker-compose.bridge.yml   # override: bridge mode for mrefd (Docker Desktop, shared hosts)
-├── .env.example                # every configurable knob, with comments
+├── .env.example                # every setting, with comments
 ├── docker/
-│   ├── mrefd/
-│   │   ├── Dockerfile          # multi-arch Debian 12 build
-│   │   └── entrypoint.sh       # renders mrefd.cfg from env, then execs mrefd
-│   └── dashboard/
-│       ├── Dockerfile          # lighttpd + php-fpm + php-dash
-│       ├── lighttpd.conf
-│       └── entrypoint.sh       # renders config.inc.php from env
+│   ├── mrefd/                  # Dockerfile, entrypoint.sh (renders mrefd.cfg from env)
+│   └── dashboard/              # lighttpd + php-fpm + php-dash
 ├── scripts/
-│   └── init.sh                 # interactive setup wizard (`make init`)
-├── config/                     # bind-mounted live-editable files (gitignored)
-│   ├── mrefd.whitelist         # created by `make init`
-│   ├── mrefd.blacklist
-│   └── mrefd.interlink
-└── mrefd/                      # upstream source as a git submodule (currently a fork)
+│   ├── init.sh                 # setup wizard (`make init`)
+│   └── tls-*.sh                # TLS key management (also in the image as tls-*)
+├── config/                     # yours, gitignored; mounted into the container
+│   ├── mrefd.whitelist / mrefd.blacklist / mrefd.interlink
+│   └── tls/                    # server.* (hub), client.* (field), peers/, hubs/
+├── deploy/                     # run from the published image, without the source
+├── docs/                       # operator manual (index.html), TLS design
+├── tools/m17-advertise/        # mDNS / Bonjour advertiser
+└── mrefd/                      # mrefd source (submodule: the greggwon fork with TLS links)
 ```
 
 ---
@@ -139,10 +313,6 @@ sudo usermod -aG docker "$USER"     # log out/in for group to take effect
 
 # 2. Git + Make
 sudo apt-get install -y git make
-
-# 3. (Only if you must run in bridge mode with IPv6)
-#    Edit /etc/docker/daemon.json to include `"ipv6": true`, then restart docker.
-#    Not required for the default host-networking layout.
 ```
 
 Multi-arch cross-builds (from an x86_64 workstation targeting `arm64`/`armv7`
@@ -153,38 +323,6 @@ For development on macOS: Docker Desktop for **Apple Silicon** (not the
 amd64/Rosetta build) or [Colima](https://github.com/abiosoft/colima). Note
 that host networking is a Linux-kernel feature — on macOS you'll need the
 `docker-compose.bridge.yml` overlay described below.
-
----
-
-## Quickstart
-
-```bash
-git clone --recurse-submodules <this-repo-url> m17-reflector
-cd m17-reflector
-
-make init            # interactive wizard: callsign, modules, email, ports…
-make build-local     # native-arch build, loaded into local docker
-make up-dashboard    # start reflector + dashboard
-make logs            # follow logs
-
-# open http://<host>:8080/ for the dashboard.
-```
-
-Or, for a total one-shot on a fresh Pi:
-
-```bash
-make first           # submodule init + wizard + build + up-dashboard
-```
-
-Later, when you change something in `.env`:
-
-```bash
-make restart         # picks up env changes without rebuilding
-```
-
-When you edit `config/mrefd.whitelist`, `config/mrefd.blacklist`, or
-`config/mrefd.interlink`, `mrefd` picks up changes within seconds — no
-restart needed.
 
 ---
 
@@ -296,7 +434,7 @@ Individual flags override values loaded from `--config`. See
 | Purpose                    | Proto | Default port | Direction | Required when                                        |
 |----------------------------|-------|--------------|-----------|------------------------------------------------------|
 | M17 protocol               | UDP   | 17000        | inbound   | always                                               |
-| TLS-authenticated interlink| TCP   | 17000        | inbound   | interlink file has `key:` or `tls:` entries          |
+| TLS links from field nodes | TCP   | 17000        | inbound   | on a hub (field nodes only dial out)                 |
 | Bonjour / mDNS advertise   | UDP   | 5353         | local LAN | `MREFD_ADVERTISE_ENABLED=true` (default)             |
 | Web dashboard (HTTP)       | TCP   | 8080         | inbound   | dashboard profile started                            |
 | Web dashboard (HTTPS)      | TCP   | 443          | inbound   | if you front the dashboard with TLS                  |
@@ -313,12 +451,15 @@ reach the container's network namespace; see the macOS quirks section below.
 Every setting lives in `.env`. The wizard covers the required fields; the
 file itself has inline comments for the rest. Grouped for reference:
 
-### Identity (required)
+### Identity
+
+Only the first two are required. The country, email and dashboard URL
+are required with Ham-DHT on, because they go on the public listing.
 
 | Var                              | Purpose                                       |
 |----------------------------------|-----------------------------------------------|
-| `MREFD_CALLSIGN`                 | `M17-XYZ` — must be unused (check dvref.com)  |
-| `MREFD_MODULES`                  | Subset of A–Z, one processing thread per module |
+| `MREFD_CALLSIGN`                 | `M17-XYZ`. Must be unused (check dvref.com)   |
+| `MREFD_MODULES`                  | e.g. `B,C,D` (`BCD` works too). One processing thread per module |
 | `MREFD_COUNTRY`                  | ISO 2-letter country code                     |
 | `MREFD_EMAIL`                    | Admin contact                                 |
 | `MREFD_DASHBOARD_URL`            | Dashboard URL, advertised over mDNS           |
@@ -328,7 +469,7 @@ file itself has inline comments for the rest. Grouped for reference:
 
 | Var                              | Purpose                                       |
 |----------------------------------|-----------------------------------------------|
-| `MREFD_ENCRYPTION_ALLOWED`       | Blank = disallowed everywhere. Or a subset.   |
+| `MREFD_ENCRYPTION_ALLOWED`       | Blank = disallowed everywhere. Or modules, e.g. `C,D` |
 | `MREFD_LISTEN_ONLY_ALLOW_ENCRYPT`| `true`/`false`                                |
 
 **Know your local regulations** — most amateur services prohibit encryption
@@ -346,17 +487,26 @@ over the air.
 | `M17_PORT`        | Host-side M17 port (host-mode: same as `MREFD_PORT`)        |
 | `DASHBOARD_PORT`  | Host-side HTTP port for the dashboard                       |
 
-### Ham-DHT (not used)
+### Ham-DHT
 
-M17export is built and run without Ham-DHT. `MREFD_BUILD_DHT` and
-`MREFD_DHT_ENABLED` both default to `false`; leave them that way.
+Field nodes run without Ham-DHT: they reach the network through their
+hub, and they're never published. Whether hubs should publish on Ham-DHT
+is still undecided, so both builds are supported:
+
+- `MREFD_BUILD_DHT` and `MREFD_DHT_ENABLED` default to `false`.
+- For a DHT hub, set both to `true` and fill in the country, email and
+  dashboard URL.
+
+Two catches with a DHT build:
+- It won't run with `MREFD_DHT_ENABLED=false`.
+- It won't start without internet access unless `MREFD_IPV4_EXT` is set.
 
 ### Build-time (rebuild required)
 
 | Var                | Purpose                             |
 |--------------------|-------------------------------------|
 | `MREFD_BUILD_DHT`  | Compile DHT support in (default off)|
-| `MREFD_BUILD_DEBUG`| Debug symbols + `-DDEBUG`           |
+| `MREFD_BUILD_DEBUG`| `-DDEBUG` packet dumps (debug symbols are always included) |
 
 ### Dashboard
 
@@ -380,17 +530,24 @@ M17export is built and run without Ham-DHT. `MREFD_BUILD_DHT` and
 
 ### TLS interlink
 
-| Var                        | Purpose                                                                 |
-|----------------------------|-------------------------------------------------------------------------|
-| `MREFD_TLS_SERVER_CERT`    | PEM cert for the reflector's TLS listener (home side)                   |
-| `MREFD_TLS_SERVER_KEY`     | PEM key matching the server cert                                        |
-| `MREFD_TLS_CLIENT_CERT`    | PEM cert this reflector presents to peers it dials (field side)         |
-| `MREFD_TLS_CLIENT_KEY`     | PEM key matching the client cert                                        |
-| `MREFD_TLS_PORT`           | TCP port for the TLS listener. Default = `MREFD_PORT` (17000)           |
-| `MREFD_TLS_BIND_ADDR`      | TLS listener bind address. Default = `MREFD_IPV6_BIND` or `0.0.0.0`     |
-| `MREFD_TLS_TIMESTAMP_SKEW` | Allowed BIRTH-timestamp skew, seconds. Default `300`                    |
+None of these are needed for the usual setup. The keys are found in
+`config/tls/`, and lines in `mrefd.interlink` turn links on (see
+[Link a field node to a hub](#link-a-field-node-to-a-hub)). Empty means
+default.
 
-Full protocol / handshake / config-file syntax:
+| Var                        | Default | Purpose |
+|----------------------------|---------|---------|
+| `MREFD_TLS_SERVER_CERT` / `_KEY` | `config/tls/server.crt` / `.key` if present | The hub's certificate and key |
+| `MREFD_TLS_CLIENT_CERT` / `_KEY` | `config/tls/client.crt` / `.key` if present | A field node's (operator's) certificate and key |
+| `MREFD_TLS_PORT`           | `MREFD_PORT` (17000) | TCP port the hub listens on |
+| `MREFD_TLS_BIND_ADDR`      | `MREFD_IPV6_BIND`, else `0.0.0.0` | Address the hub listens on |
+| `MREFD_TLS_TIMESTAMP_SKEW` | `300` | How far apart the two ends' clocks may be, in seconds. Use NTP |
+| `MREFD_TLS_MAX_AUDIO_MS`   | `200` | Voice waiting longer than this to go out is dropped, not sent late. Raise for bursty links (LTE, busy Wi-Fi) |
+| `MREFD_TLS_DATA_QUEUE_KB`  | `1024` | Most packet-mode data that may queue behind a slow link |
+| `MREFD_TLS_KEEPALIVE`      | `60,30,8` | TCP keepalive: idle, interval, count (seconds), or `off`. Notices a dead link in about 5 min |
+| `MREFD_TLS_USER_TIMEOUT`   | `0` (off) | Drop the link when sent data has gone unacknowledged this many seconds |
+
+How the protocol works:
 [docs/tls-interlink-design.md](docs/tls-interlink-design.md).
 
 ---
@@ -400,10 +557,10 @@ Full protocol / handshake / config-file syntax:
 An M17 reflector by itself is useful. Interlinked reflectors are what makes
 the network. Every entry you add to `./config/mrefd.interlink` peers your
 reflector to another `mrefd` (or a `urfd` gateway that exports an XLX / DMR /
-D-STAR / YSF room into M17). Because M17export is built without Ham-DHT,
-peers are listed by static IP and port (or, for field nodes, by TLS) rather
-than by callsign lookup; the formats are described in comments at the top
-of that file.
+D-STAR / YSF room into M17). Without Ham-DHT, UDP peers are listed by IP
+and port rather than looked up by callsign. The formats are described in
+comments at the top of that file. Field nodes link to a hub with TLS
+instead (see [Link a field node to a hub](#link-a-field-node-to-a-hub)).
 
 - The community list of active reflectors and interlink gateways is at
   **[https://dvref.com](https://dvref.com)** — useful for finding a public
@@ -412,7 +569,8 @@ of that file.
   and both sides need to keep the encryption capabilities of the shared
   module aligned or traffic will silently drop.
 - Edits to `./config/mrefd.interlink` are picked up by the running reflector
-  within a few seconds — no restart.
+  within a few seconds — no restart. The exception is a field node's TLS
+  hub line (`tls:`), which takes effect when the node restarts.
 
 ---
 
@@ -522,6 +680,25 @@ docker buildx build --pull ...      # or `make build-local` after `docker pull d
 ---
 
 ## Troubleshooting
+
+**TLS links.** The field node's log (`make logs`) says what's wrong:
+
+| Log says | Fix |
+|---|---|
+| `hub rejected us: our key isn't registered there` | Hub operator: `scripts/tls-add-peer.sh --cert <your client.crt> --modules ...` |
+| `hub rejected us: module B isn't allowed for our key at the hub` | Hub operator: add the module with `tls-add-peer.sh --modules` |
+| `hub rejected us: our clock and the hub's differ too much` | Turn on NTP at both ends (they must agree within 5 minutes) |
+| `hub rejected us: BIRTH signature didn't verify` | The hub has an old copy of your certificate: send the current one; hub runs `tls-add-peer.sh --force` |
+| `can't resolve '...'` or `TCP connect to ... failed: ...` | Check the host name in the `tls:` line, and that TCP 17000 is open inbound on the hub |
+| `TLS handshake failed: the hub's certificate doesn't match our servercert: pin ...` | The hub's key changed: get its new `server.crt` and rerun `tls-add-hub.sh` |
+| entrypoint: `... isn't readable by mrefd` | The key file belongs to another user: run the `chown` it prints |
+| `can't keep up with voice: dropped N stale voice frame(s)` | The link is slower than voice needs (~31 kbit/s): use data (packet mode) on it |
+| `mrefd.interlink registers operator keys, but MREFD_TLS_SERVER_CERT ... aren't set` | The hub has no key yet: `scripts/tls-genkey.sh --role hub ...`, then restart |
+
+`scripts/tls-verify.sh --host <hub>` checks from a field node that the hub
+is reachable, and shows which hub certificate it presents.
+
+**Everything else:**
 
 - **`mrefd` exits with `MREFD_CALLSIGN is required`** — you skipped `make
   init` or didn't fill in a callsign. Rerun the wizard or edit `.env`.

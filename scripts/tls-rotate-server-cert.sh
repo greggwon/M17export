@@ -1,102 +1,57 @@
 #!/bin/bash
 # =============================================================================
-# tls-rotate-server-cert.sh - Generate a new server keypair, back up the
-#   current one, install the new one. Prints the new fingerprint for
-#   redistribution to field operators.
+# tls-rotate-server-cert.sh - On a hub: replace the hub's key and certificate.
 #
-# Existing TLS sessions will drop when mrefd's TLS listener next restarts.
-#
-# Design: docs/tls-interlink-design.md §7.5
+# The old pair is kept as *.<timestamp>.bak. Every field operator linking to
+# this hub needs the new certificate (tls-add-hub.sh again) before their
+# nodes can reconnect, so plan it with them.
 # =============================================================================
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TLS_DIR="${ROOT}/config/tls"
-CERT="${TLS_DIR}/server.crt"
-KEY="${TLS_DIR}/server.key"
-
-# ---- helpers ----------------------------------------------------------------
 die() { printf 'tls-rotate: ERROR: %s\n' "$*" >&2; exit 1; }
 say() { printf 'tls-rotate: %s\n' "$*" >&2; }
+. "$(dirname "${BASH_SOURCE[0]}")/tls-common.sh"
 
 usage() {
     cat <<EOF
-Usage: tls-rotate-server-cert.sh --identity <string> [options]
+Usage: tls-rotate-server-cert.sh --identity <M17-XXX> [options]
 
-Rotates the reflector's TLS server credential. The old cert/key are moved
-to a timestamped backup file alongside; new Ed25519 keypair is generated.
-
-Required:
-  --identity <string>       Subject CN for the new cert (e.g. "M17-HOM").
-                            Typically the same as the previous server cert.
-
-Options:
-  --days <n>                Validity in days. Default: 3650.
-
-After rotation:
-  1. Restart the mrefd container so the new key takes effect:
-       docker compose restart mrefd
-  2. Publish the new fingerprint to your field operators out-of-band.
-     Existing field boxes must have this new cert pinned before they can
-     reconnect.
+  --identity <name>   The hub's callsign, e.g. M17-HUB.
+  --config <dir>      Reflector config directory. Default: config/ next to these scripts
+  --days <n>          Validity in days. Default: 3650.
 EOF
 }
 
-# ---- argument parsing -------------------------------------------------------
-IDENTITY=""
-DAYS=3650
-
+IDENTITY="" DAYS=3650 CFG=""
 while (( $# > 0 )); do
     case "$1" in
-        --identity) IDENTITY="${2:?}"; shift 2 ;;
+        --identity) IDENTITY="$(upper "${2:?}")"; shift 2 ;;
+        --config)   CFG="${2:?}"; shift 2 ;;
         --days)     DAYS="${2:?}"; shift 2 ;;
         -h|--help)  usage; exit 0 ;;
         *)          die "unknown argument: $1  (try --help)" ;;
     esac
 done
-
 [[ -n "$IDENTITY" ]] || { usage >&2; die "--identity is required"; }
-[[ "$IDENTITY" =~ ^[A-Za-z0-9._-]+$ ]] || die "identity has unsafe characters"
+set_config_dir "$CFG"
 
-# ---- back up existing ------------------------------------------------------
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-BACKED_UP=0
-if [[ -e "$CERT" || -e "$KEY" ]]; then
-    say "backing up existing server cert/key with suffix .${STAMP}.bak"
-    [[ -e "$CERT" ]] && mv "$CERT" "${CERT}.${STAMP}.bak"
-    [[ -e "$KEY"  ]] && mv "$KEY"  "${KEY}.${STAMP}.bak"
-    BACKED_UP=1
-else
-    say "no existing server cert/key found; generating fresh"
-fi
+for f in server.crt server.key; do
+    if [[ -e "${TLS_DIR}/$f" ]]; then
+        mv "${TLS_DIR}/$f" "${TLS_DIR}/$f.${STAMP}.bak"
+        say "kept the old $f as $f.${STAMP}.bak"
+    fi
+done
 
-# ---- generate the new pair via tls-genkey.sh -------------------------------
-GENKEY="${ROOT}/scripts/tls-genkey.sh"
-[[ -x "$GENKEY" ]] || die "cannot execute $GENKEY"
+GENKEY="${TLS_SCRIPTS_DIR}/tls-genkey.sh"
+[[ -x "$GENKEY" ]] || GENKEY="${TLS_SCRIPTS_DIR}/tls-genkey"    # as installed in the image
+"$GENKEY" --identity "$IDENTITY" --role hub \
+    --config "$CONFIG_DIR" --days "$DAYS" 2>/dev/null | sed 's/^/new fingerprint: /'
 
-# tls-genkey computes prefix.crt / prefix.key, so pass the base without ext.
-"$GENKEY" \
-    --identity "$IDENTITY" \
-    --role     home \
-    --out      "${TLS_DIR}/server" \
-    --days     "$DAYS"
-
-# ---- next steps -------------------------------------------------------------
 cat >&2 <<NEXT
 
-Rotation complete.
-
-Backed up (if present):
-  ${CERT}.${STAMP}.bak
-  ${KEY}.${STAMP}.bak
-
 Next:
-  1. Restart mrefd to pick up the new cert:
-       docker compose restart mrefd
-  2. Publish the new fingerprint (printed above) to your field operators.
-     Each field box must replace its pinned server.pem before it can
-     reconnect. Older field boxes still holding the old fingerprint will
-     fail their TLS validation until updated.
-
-Keep the .bak files until every field operator has confirmed migration.
+  1. Restart the hub:  make restart   (or docker compose restart mrefd)
+  2. Send ${TLS_DIR}/server.crt and the new fingerprint to every field
+     operator. Each one reruns tls-add-hub.sh with it and restarts their
+     node; until then their nodes can't connect.
 NEXT

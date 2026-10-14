@@ -1,149 +1,148 @@
 #!/bin/bash
 # =============================================================================
-# tls-list-peers.sh - Print the current TLS peer registry.
+# tls-list-peers.sh - Show this reflector's TLS links.
 #
-# Reports for each registered operator key:
-#   - callsign (the cert's CN)
-#   - modules its nodes may assert, from the interlink line
-#   - nodes currently connected with it, CALLSIGN-<module>@address
-#     (from mrefd.json if available)
-#   - cert SPKI SHA-256 fingerprint
-#
-# Design: docs/tls-interlink-design.md §7.4
+# On a hub: each registered operator key, the modules its nodes may use,
+# which of its nodes are connected now (CALLSIGN-MODULE@address), and the
+# key's fingerprint.
+# On a field node: each hub it links to and whether that link is up.
 # =============================================================================
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TLS_DIR="${ROOT}/config/tls"
-PEERS_DIR="${TLS_DIR}/peers"
-INTERLINK="${ROOT}/config/mrefd.interlink"
-JSON_STATUS_PATH="${MREFD_JSON_PATH:-/var/log/mrefd/mrefd.json}"
-
-# ---- helpers ----------------------------------------------------------------
 die() { printf 'tls-list-peers: ERROR: %s\n' "$*" >&2; exit 1; }
+. "$(dirname "${BASH_SOURCE[0]}")/tls-common.sh"
 
 usage() {
     cat <<EOF
 Usage: tls-list-peers.sh [options]
 
-Prints the current TLS peer registry with connection state.
-
-Options:
-  --json                Emit as JSON instead of a formatted table.
-  --status-file <path>  Path to mrefd.json. Default: \$MREFD_JSON_PATH or
-                        /var/log/mrefd/mrefd.json.
+  --config <dir>        Reflector config directory. Default: config/ next to these scripts
+  --json                Emit JSON instead of a table.
+  --status-file <path>  mrefd.json to read connection state from. Default:
+                        \$MREFD_JSON_PATH, /var/log/mrefd/mrefd.json, or the
+                        running mrefd container's copy (via docker exec).
 EOF
 }
 
-FMT=table
+FMT=table CFG="" JSON_STATUS_PATH="${MREFD_JSON_PATH:-/var/log/mrefd/mrefd.json}"
 while (( $# > 0 )); do
     case "$1" in
         --json)         FMT=json; shift ;;
+        --config)       CFG="${2:?}"; shift 2 ;;
         --status-file)  JSON_STATUS_PATH="${2:?}"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         *)              die "unknown argument: $1  (try --help)" ;;
     esac
 done
+set_config_dir "$CFG"
+find_openssl
 
-OPENSSL="${OPENSSL:-openssl}"
-command -v "$OPENSSL" >/dev/null 2>&1 || die "openssl not found (set OPENSSL=/path/to/openssl)"
-if "$OPENSSL" version 2>/dev/null | grep -q LibreSSL; then
-    die "$("$OPENSSL" version) can't read Ed25519 certificates. On macOS: brew install openssl@3, then rerun with OPENSSL=\$(brew --prefix openssl@3)/bin/openssl"
+# mrefd's live status. On the host it sits in a docker volume, so read it
+# through the container when the file itself isn't reachable.
+STATUS=""
+if [[ -r "$JSON_STATUS_PATH" ]]; then
+    STATUS=$(cat "$JSON_STATUS_PATH")
+elif command -v docker >/dev/null 2>&1; then
+    STATUS=$(docker exec mrefd cat /var/log/mrefd/mrefd.json 2>/dev/null || true)
 fi
-
-# ---- gather -----------------------------------------------------------------
-declare -a IDS FPS MODS STATES IPS
-
-fingerprint() {
-    "$OPENSSL" x509 -in "$1" -pubkey -noout 2>/dev/null \
-        | "$OPENSSL" pkey -pubin -outform DER 2>/dev/null \
-        | "$OPENSSL" dgst -sha256 -binary 2>/dev/null \
-        | "$OPENSSL" base64
-}
-
-callsign_of() {
-    "$OPENSSL" x509 -in "$1" -noout -subject -nameopt RFC2253 2>/dev/null \
-        | sed -E 's/.*CN=([^,]+).*/\1/'
-}
+HAVE_JQ=0
+command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 
 modules_for() {
-    local id="$1"
-    if [[ -f "$INTERLINK" ]]; then
-        awk -v id="$id" '
-            $1 == id {
-                for (i=2; i<=NF; i++) {
-                    if ($i !~ /^key:/ && $i !~ /^tls:/ && $i !~ /^servercert:/) {
-                        print $i; exit
-                    }
-                }
-            }' "$INTERLINK"
-    fi
+    [[ -f "$INTERLINK" ]] || return 0
+    local m
+    m=$(awk -v id="$1" '
+        toupper($1) == id {
+            m = ""
+            for (i = 2; i <= NF; i++)
+                if ($i !~ /^(key|tls|servercert):/) m = m $i
+            print m; exit
+        }' "$INTERLINK")
+    normalize_modules "$m" 2>/dev/null || printf '%s' "$m"
 }
 
-# Connected nodes for an operator key: "CALL-B@1.2.3.4 CALL-C@5.6.7.8".
-lookup_nodes() {
-    local id="$1"
-    if [[ -r "$JSON_STATUS_PATH" ]] && command -v jq >/dev/null 2>&1; then
-        jq -r --arg id "$id" '
-            (.TLS.Links // [])[]
-            | select(.Direction == "incoming" and .Key == $id and .State == "connected")
-            | "\(.Name)@\(.Address)"
-        ' "$JSON_STATUS_PATH" 2>/dev/null | sort -u | paste -sd' ' -
-    fi
+links() {   # links <jq filter producing lines>
+    [[ -n "$STATUS" ]] && (( HAVE_JQ )) || return 0
+    printf '%s' "$STATUS" | jq -r "$1" 2>/dev/null
 }
 
-if [[ ! -d "$PEERS_DIR" ]]; then
-    if [[ "$FMT" == "json" ]]; then
-        echo '{"peers":[]}'
-    else
-        echo "(no peer registry at $PEERS_DIR)"
-    fi
-    exit 0
-fi
-
+# ---- hub side: registered operator keys -------------------------------------
+declare -a IDS FPS MODS STATES NODES
 shopt -s nullglob
 for cert in "$PEERS_DIR"/*.pub.pem; do
-    id=$(callsign_of "$cert")
+    id=$(cert_cn "$cert")
     [[ -n "$id" ]] || id=$(basename "$cert" .pub.pem)
+    nodes=$(links "(.TLS.Links // [])[]
+        | select(.Direction == \"incoming\" and .Key == \"$id\" and .State == \"connected\")
+        | \"\(.Name)@\(.Address)\"" | sort -u | paste -sd' ' -)
     IDS+=("$id")
-    FPS+=("$(fingerprint "$cert")")
+    FPS+=("$(spki_fingerprint "$cert")")
     MODS+=("$(modules_for "$id")")
-    nodes=$(lookup_nodes "$id")
-    if [[ -n "$nodes" ]]; then
-        STATES+=("connected")
-        IPS+=("$nodes")
-    else
-        STATES+=("idle")
-        IPS+=("")
-    fi
+    if [[ -n "$nodes" ]]; then STATES+=("connected"); else STATES+=("idle"); fi
+    NODES+=("$nodes")
 done
 
-# ---- render -----------------------------------------------------------------
-render_table() {
-    if [[ ${#IDS[@]} -eq 0 ]]; then
-        echo "(no peers registered)"
-        return
-    fi
-    printf '%-10s  %-8s  %-9s  %-46s  %s\n' CALLSIGN MODULES STATE FINGERPRINT NODES
-    printf '%-10s  %-8s  %-9s  %-46s  %s\n' -------- ------- ----- ----------- -----
-    for i in "${!IDS[@]}"; do
-        printf '%-10s  %-8s  %-9s  %-46s  %s\n' \
-            "${IDS[i]}" "${MODS[i]:--}" "${STATES[i]}" "${FPS[i]}" "${IPS[i]:--}"
-    done
-}
+# ---- field side: hubs this node links to -------------------------------------
+declare -a HUBS HMODS HHOSTS HSTATES
+if [[ -f "$INTERLINK" ]]; then
+    while read -r hub mod host; do
+        state=$(links "(.TLS.Links // [])[]
+            | select(.Direction == \"outgoing\" and .Name == \"$hub\")
+            | .State + (if .LastError != \"\" and .State != \"connected\" then \" (\" + .LastError + \")\" else \"\" end)" | head -1)
+        HUBS+=("$hub"); HMODS+=("$mod"); HHOSTS+=("$host"); HSTATES+=("${state:-unknown}")
+    done < <(awk '{
+            host = ""; mod = ""
+            for (i = 2; i <= NF; i++) {
+                if ($i ~ /^tls:/) host = substr($i, 5)
+                else if ($i !~ /^(key|servercert):/) mod = mod $i
+            }
+            if (host != "") print toupper($1), toupper(mod), host
+        }' "$INTERLINK")
+fi
 
-render_json() {
+# ---- render -----------------------------------------------------------------
+if [[ "$FMT" == "json" ]]; then
     printf '{"peers":['
-    local sep=""
+    sep=""
     for i in "${!IDS[@]}"; do
         printf '%s{"callsign":"%s","modules":"%s","state":"%s","nodes":"%s","fingerprint":"%s"}' \
-            "$sep" "${IDS[i]}" "${MODS[i]}" "${STATES[i]}" "${IPS[i]}" "${FPS[i]}"
+            "$sep" "${IDS[i]}" "${MODS[i]}" "${STATES[i]}" "${NODES[i]}" "${FPS[i]}"
+        sep=","
+    done
+    printf '],"hubs":['
+    sep=""
+    for i in "${!HUBS[@]}"; do
+        printf '%s{"hub":"%s","module":"%s","host":"%s","state":"%s"}' \
+            "$sep" "${HUBS[i]}" "${HMODS[i]}" "${HHOSTS[i]}" "${HSTATES[i]}"
         sep=","
     done
     printf ']}\n'
-}
+    exit 0
+fi
 
-case "$FMT" in
-    table) render_table ;;
-    json)  render_json ;;
-esac
+if (( ${#IDS[@]} == 0 && ${#HUBS[@]} == 0 )); then
+    echo "No TLS links configured in $CONFIG_DIR."
+    exit 0
+fi
+if (( ${#IDS[@]} > 0 )); then
+    echo "Operator keys registered on this hub:"
+    printf '  %-10s  %-8s  %-9s  %-46s  %s\n' CALLSIGN MODULES STATE FINGERPRINT NODES
+    for i in "${!IDS[@]}"; do
+        printf '  %-10s  %-8s  %-9s  %-46s  %s\n' \
+            "${IDS[i]}" "${MODS[i]:--}" "${STATES[i]}" "${FPS[i]}" "${NODES[i]:--}"
+    done
+fi
+if (( ${#HUBS[@]} > 0 )); then
+    (( ${#IDS[@]} > 0 )) && echo
+    echo "Hubs this node links to:"
+    printf '  %-10s  %-6s  %-32s  %s\n' HUB MODULE ADDRESS STATE
+    for i in "${!HUBS[@]}"; do
+        printf '  %-10s  %-6s  %-32s  %s\n' "${HUBS[i]}" "${HMODS[i]}" "${HHOSTS[i]}" "${HSTATES[i]}"
+    done
+fi
+if [[ -z "$STATUS" ]]; then
+    echo
+    echo "(connection state unavailable: mrefd.json not found and no running 'mrefd' container)"
+elif (( ! HAVE_JQ )); then
+    echo
+    echo "(install jq to see connection state)"
+fi

@@ -1,273 +1,182 @@
-# Certificates for the TLS interlink
+# TLS keys and certificates
 
-**Before you go further:** you may not need TLS at all. The community
-default for reflector interlinks is IP-based UDP peering, and that
-continues to work fine — TLS is additive, not a replacement. If you
-haven't already decided that TLS solves a specific problem for this
-peering, read [`INTERLINK-CHOICES.md`](INTERLINK-CHOICES.md) first.
+Reference for operators setting up TLS links between field nodes and a hub.
+Not sure you need TLS? UDP interlinks still work and stay the default; see
+[`INTERLINK-CHOICES.md`](INTERLINK-CHOICES.md). Protocol details are in
+[`docs/tls-interlink-design.md`](../docs/tls-interlink-design.md).
 
----
+## Who makes which key
 
-There are three certificates in play for any TLS interlink:
+| Who            | Key name                          | Files (in `config/tls/`) | How many |
+|----------------|-----------------------------------|--------------------------|----------|
+| Hub operator   | reflector callsign, e.g. `M17-HUB` | `server.crt`, `server.key` | one per hub |
+| Field operator | bare callsign, e.g. `W5ABC`        | `client.crt`, `client.key` | one per operator, copied to all their nodes |
 
-1. **Server cert** on the *home* reflector — presented on incoming TLS so
-   field peers know they're talking to the right server.
-2. **Operator cert** used by the *field* nodes — **one per operator,
-   shared by all of that operator's nodes**. Its CN is the operator's bare
-   callsign (`W5GGW`). Each node presents it on outbound TLS, signs its
-   BIRTH message with it, and asserts the one module it is linking. The
-   hub names the node `CALLSIGN-MODULE` (`W5GGW-B`, `W5GGW-C`, ...).
-3. **Peer registration files** on the home reflector — one PEM per
-   operator, dropped in `config/tls/peers/` so the home knows which keys
-   to accept and which modules each key's nodes may assert.
+- Each field node links one module per hub line. The hub sees it as
+  `CALLSIGN-MODULE` (`W5ABC-B`), so one key covers all of an operator's nodes.
+- Keys are self-signed Ed25519. There is no CA.
+- The hub accepts a node when its certificate's fingerprint matches a
+  registered certificate and the module it asks for is allowed for that key.
+  The node trusts only the hub certificate it was given.
+- Clocks must agree within 5 minutes (`MREFD_TLS_TIMESTAMP_SKEW`): run NTP on
+  both ends.
 
-The current model uses **self-signed Ed25519 certs** for all three. A
-CA-signed model (one trust anchor at the home, signed field certs) is
-described at the end as a future direction.
+## What to send, and what never to send
 
----
+- Send the **`.crt`** only. Field operators send `client.crt` to the hub
+  operator; the hub operator sends `server.crt` to each field operator.
+- **Never send a `.key` file.** Nobody else needs it, including the hub.
+- Check every certificate you receive by comparing its **fingerprint** with
+  the sender by phone or in an email you trust. `tls-genkey`, `tls-add-peer`
+  and `tls-add-hub` all print it. Don't install a certificate whose
+  fingerprint doesn't match.
 
-## Trust model at a glance
-
-```
-+-------------------+                           +--------------------+
-|  Field reflector  |     TLS handshake         |  Home reflector    |
-|                   | <-----------------------> |                    |
-|  * client.crt     |     (mutually visible)    |  * server.crt      |
-|  * client.key     |                           |  * server.key      |
-|  * home.pem       |                           |  * peers/          |
-|    (pinned)       |                           |    W5GGW.pub.pem   |
-+-------------------+                           +--------------------+
-
-Home trusts field: home matches the incoming TLS peer's cert fingerprint
-                   against the files in config/tls/peers/; the matching
-                   cert's CN is the node's callsign, the node picks the
-                   module (one the registration allows)
-Field trusts home: field pins the exact server cert file (home.pem)
-                   as the ONLY trust anchor
-```
-
-No public CA is involved. Every trust decision is explicit and
-per-connection.
-
----
-
-## Generating certs
-
-The container ships `scripts/tls-genkey.sh` (also available in the
-M17export source repo). One invocation per identity: one for the hub,
-one per operator (not per node).
-
-The script needs OpenSSL 1.1.1 or newer. macOS's `/usr/bin/openssl` is
-LibreSSL, which can't make Ed25519 certificates; install Homebrew's
-`openssl@3` and run the scripts with
-`OPENSSL=$(brew --prefix openssl@3)/bin/openssl`.
-
-### Home operator
+## Hub setup
 
 ```bash
-# From the M17export repo (or wherever tls-genkey.sh lives):
-scripts/tls-genkey.sh \
-    --identity M17-HOM \
-    --role home \
-    --out /path/to/deploy/config/tls/server
+scripts/tls-genkey.sh --role hub --identity M17-HUB   # prints the fingerprint
 ```
 
-Produces `server.crt` (public, distribute) and `server.key` (private,
-0600). Also prints the SPKI SHA-256 fingerprint — publish that alongside
-the cert so field operators can verify what they downloaded.
+Give `config/tls/server.crt` and the fingerprint to the field operators.
+Open **TCP 17000** inbound on the hub's firewall (UDP 17000 as usual).
 
-Distribute `server.crt` out-of-band to every field operator (email, git
-repo, your website). No secret material leaves the home.
-
-### Field operator
+For each field operator, when their `client.crt` arrives:
 
 ```bash
-scripts/tls-genkey.sh \
-    --identity W5GGW \
-    --role field \
-    --out /path/to/deploy/config/tls/client
+scripts/tls-add-peer.sh --cert W5ABC.crt --modules B,C
 ```
 
-Produces `client.crt` (public, send to home admin) and `client.key`
-(private, 0600). Prints the fingerprint. Copy the **same** pair to every
-node you run; each node is told apart by the module it asserts, not by
-its certificate.
+This copies the cert to `config/tls/peers/W5ABC.pub.pem` and adds
+`W5ABC  B,C  key:/etc/mrefd/tls/peers/W5ABC.pub.pem` to `mrefd.interlink`.
+mrefd picks it up within seconds; no restart. Adding the first key starts the
+TLS listener. The callsign comes from the certificate; `--identity W5ABC`
+is optional and must match if given.
 
-On each node, fetch the home's `server.crt` from wherever it's
-published, save it as `config/tls/home.pem`, and add a line to that
-node's `config/mrefd.interlink` naming the hub and the **one** module
-this node links:
+## Field setup
 
-```
-M17-HOM  B  tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
-```
-
-A second node using module C has the same cert and key, and `C` in that
-position. The hub sees them as `W5GGW-B` and `W5GGW-C`.
-
-### Home operator registers the operator's cert
-
-Once per operator, however many nodes they run. Home operator receives
-`client.crt`, saves it as
-`config/tls/peers/W5GGW.pub.pem`, and adds a line to
-`config/mrefd.interlink`:
-
-```
-W5GGW  BCD  key:/etc/mrefd/tls/peers/W5GGW.pub.pem
-```
-
-`BCD` is the set of modules that operator's nodes may assert. The
-callsign on the line must equal the cert's CN, or mrefd skips the line
-with a log message. `scripts/tls-add-peer.sh --identity W5GGW --cert
-client.crt --modules BCD` does both steps and checks the CN for you.
-
-mrefd hot-reloads the interlink file within seconds — no restart needed.
-
----
-
-## Generating without `tls-genkey.sh` (openssl directly)
-
-If you don't have the helper script handy:
+Once per operator, on any machine:
 
 ```bash
-# Ed25519 self-signed cert, 10-year validity, Subject CN = identity
-openssl req -x509 -newkey ed25519 -nodes \
-    -days 3650 \
-    -subj "/CN=W5GGW" \
-    -addext "subjectAltName=DNS:W5GGW" \
+scripts/tls-genkey.sh --identity W5ABC   # send client.crt (never client.key) to the hub operator
+```
+
+Copy the whole `config/tls/` directory to each node. Then on each node:
+
+```bash
+scripts/tls-add-hub.sh --hub M17-HUB --host hub.example.org --module B --cert M17-HUB.crt
+make restart      # or: docker compose restart mrefd
+```
+
+This copies the hub cert to `config/tls/hubs/M17-HUB.crt` and adds
+`M17-HUB  B  tls:hub.example.org:17000  servercert:/etc/mrefd/tls/hubs/M17-HUB.crt`.
+`--host` takes `name` or `name:port` (default 17000). Use a DNS name; IPv6
+literals aren't supported. Changes to a node's `tls:` lines take effect only
+after restarting that node. `--remove --hub M17-HUB` drops the link.
+
+## Checking
+
+- Dashboard "TLS Links" page, and the badge on every page.
+- `make logs` shows `link UP` (or `link DOWN ...` with the reason).
+- `scripts/tls-list-peers.sh`: on a hub, each key with its modules,
+  fingerprint and connected nodes; on a field node, each hub and its state.
+- `scripts/tls-verify.sh --host hub.example.org --expect-fingerprint <fp>`:
+  checks the hub is reachable and is the hub you expect. Whether the hub
+  accepts *your* key shows in the node's log ("hub rejected us: key not
+  registered", "module not allowed", "clock skew").
+
+## Running the scripts
+
+- All scripts take `--config <dir>`: the reflector's config directory (the one
+  mounted at `/etc/mrefd`). Default: the repo's `config/`, or `/etc/mrefd`
+  inside the image. `tls-verify` has no `--config`; it only talks to the hub.
+- Callsigns and modules may be lowercase; modules may be `B,C`, `BC` or `"b c"`.
+- **macOS:** `/usr/bin/openssl` is LibreSSL and can't make Ed25519 keys. Run
+  `brew install openssl@3`; the scripts find it automatically.
+- **No OpenSSL at all:** run the scripts from the image (every script is there
+  without the `.sh`):
+
+  ```bash
+  docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/mrefd" \
+      --entrypoint tls-genkey ghcr.io/greggwon/mrefd:latest --identity W5ABC
+  ```
+
+## `config/tls` layout
+
+```
+config/tls/                 mounted read-only at /etc/mrefd/tls
+├── server.crt, server.key  hub's own key
+├── client.crt, client.key  field operator's key (same on all their nodes)
+├── peers/W5ABC.pub.pem     hub: one per registered operator
+└── hubs/M17-HUB.crt        field: pinned certificate of each hub
+```
+
+`config/mrefd.interlink` is mounted separately at `/etc/mrefd/mrefd.interlink`.
+Both `docker-compose.yml` files mount `config/tls`. The entrypoint uses the
+`server.*` and `client.*` files automatically; set
+`MREFD_TLS_SERVER_CERT/KEY` or `MREFD_TLS_CLIENT_CERT/KEY` only to point
+somewhere else. Keys are mode 0600. The container runs as uid 1000; if it
+can't read a key it stops and prints the `chown` command to run.
+
+## Revoking and changing access (hub)
+
+All of these are live; no restart.
+
+- **Revoke an operator's key:** `scripts/tls-remove-peer.sh --identity W5ABC`.
+  Every node using that key is disconnected within seconds and refused from
+  then on.
+- **Drop one module:** rerun `tls-add-peer.sh` with the modules they keep,
+  e.g. `--cert W5ABC.crt --modules B`. Nodes on the removed module are
+  disconnected.
+- **Retire one node:** same as dropping its module. The operator's other
+  nodes carry on. (On the node itself: `tls-add-hub.sh --remove --hub M17-HUB`.)
+
+## Rotating keys
+
+**Operator key** (lost, leaked or replaced):
+
+1. Operator: `scripts/tls-genkey.sh --identity W5ABC --force`, then copy the
+   new `config/tls/client.*` to every node and restart them.
+2. Operator sends the new `client.crt` to the hub operator, with the new
+   fingerprint.
+3. Hub: `scripts/tls-add-peer.sh --cert W5ABC.crt --modules B,C --force`.
+   Nodes still on the old key are disconnected.
+
+**Hub key:**
+
+1. Hub: `scripts/tls-rotate-server-cert.sh --identity M17-HUB` (the old pair
+   is kept as `server.*.<timestamp>.bak`), then `make restart`.
+2. Send the new `server.crt` and fingerprint to every field operator.
+3. Each field operator reruns `tls-add-hub.sh` with the new cert and restarts
+   their nodes. Until then those nodes can't connect, so plan it with them.
+
+## Doing it with plain openssl
+
+OpenSSL 1.1.1 or newer.
+
+```bash
+# Key and self-signed cert, 10 years, CN = callsign (M17-HUB for a hub)
+openssl req -x509 -newkey ed25519 -nodes -days 3650 \
+    -subj "/CN=W5ABC" -addext "subjectAltName=DNS:W5ABC" \
     -keyout client.key -out client.crt
-
 chmod 0600 client.key
 
-# Print the SPKI SHA-256 fingerprint (matches what mrefd stores internally)
+# Fingerprint (SPKI SHA-256, base64), the same value the scripts print
 openssl x509 -in client.crt -pubkey -noout \
-  | openssl pkey -pubin -outform DER \
-  | openssl dgst -sha256 -binary \
-  | openssl base64
-```
+  | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | openssl base64
 
-Same steps for the home's `server.crt` / `server.key` — just change the
-`--identity` / CN.
-
----
-
-## Verifying a cert someone sent you
-
-Before dropping a received `client.crt` into `config/tls/peers/`, sanity
-check it:
-
-```bash
-# Subject CN must match the identity you agreed on
+# Check a cert you received: name and key type
 openssl x509 -in client.crt -noout -subject
-
-# Key algorithm should say ED25519
-openssl x509 -in client.crt -noout -text | grep 'Public Key Algorithm'
-
-# Compare fingerprint against what the sender told you out-of-band
-openssl x509 -in client.crt -pubkey -noout \
-  | openssl pkey -pubin -outform DER \
-  | openssl dgst -sha256 -binary | openssl base64
+openssl x509 -in client.crt -noout -text | grep 'Public Key Algorithm'   # ED25519
 ```
 
-If any of those don't match expectations, do NOT install the cert.
+Then put the files where the layout above says and write the
+`mrefd.interlink` lines shown under hub and field setup. A `key:` line's
+callsign must equal the certificate's CN, or mrefd skips it.
 
----
+## Future: CA-signed certificates
 
-## Server-cert distribution
-
-You have to get `server.crt` to every field operator via a channel that
-can't be MITM'd back at you. Options in decreasing operator-friendliness:
-
-- **Signed HTTPS**: publish `server.crt` on your reflector's dashboard
-  site under a real CA-issued HTTPS cert. Field operators `curl` it.
-  Easiest. TLS itself protects you.
-- **DVREF / M17 community listing**: publish the SPKI fingerprint next
-  to your `M17-XXX` listing. Field operators install the cert from
-  anywhere they like, verify the fingerprint before trusting.
-- **git repo**: push `server.crt` to a public repo the field operators
-  clone. GitHub's HTTPS + repo signing protects the download.
-- **Direct handoff**: at a club meeting, over ham radio (voice the
-  fingerprint), or via a signed email. Least convenient, best for a
-  small tight-knit group.
-
-Whichever channel — always publish the fingerprint too, so operators can
-verify the file's SPKI matches independently.
-
----
-
-## Rotation
-
-### Operator rotates their key
-
-1. Operator: `scripts/tls-genkey.sh --identity <same> --role field --out … --force`
-2. Operator sends new `client.crt` to home and copies the new pair to
-   every one of their nodes.
-3. Home: `scripts/tls-add-peer.sh --identity <same> --cert client.crt \
-   --modules BCD --force` (or just replace the file and let mrefd
-   hot-reload).
-4. Field restarts mrefd; new cert is in effect on the next connect.
-
-### Home rotates its key
-
-Big deal — every field has to install the new `server.crt`.
-
-1. Home: `scripts/tls-rotate-server-cert.sh --identity M17-HOM`
-2. Publish the new `server.crt` and fingerprint via your channel.
-3. Every field operator downloads and replaces `home.pem` on their box.
-4. Home: `docker compose restart mrefd` when everyone's had a chance to
-   update. Any field still holding the old cert will fail TLS validation
-   until they update.
-
-Keep the old key material for a grace period so operators can complete
-migration in their own time.
-
-### Revoking an operator
-
-Home: `scripts/tls-remove-peer.sh --identity <callsign>`
-
-That deletes the operator's cert file, strips the interlink line, and
-(via the admin socket / iptables fallback) drops the live sessions of
-all of that operator's nodes. Effective immediately. See
-`docs/tls-interlink-design.md §7.3` for the sequence.
-
-### Retiring one node
-
-Keep the key; remove that node's module letter from the `MODULES` on the
-operator's interlink line (e.g. `BCD` → `BD`). mrefd hot-reloads, and the
-node is refused on its next connect while the operator's other nodes
-carry on.
-
----
-
-## Future direction: CA-signed field certs
-
-The self-signed-per-peer model above scales fine for tens of field
-peers — the home's `peers/` directory grows linearly with membership.
-For larger deployments (a whole ARES section, hundreds of operators) a
-CA-signed model would be cleaner:
-
-- Home operator maintains a **CA cert** and CA private key.
-- Field operator generates a keypair and a **CSR** (certificate signing
-  request) with their callsign in the Subject CN.
-- Field emails the CSR to the home admin.
-- Home admin signs the CSR with the CA key, produces `client.crt`, sends
-  it back.
-- Field box holds `client.crt` + `client.key` + a pinned `home.pem` (same
-  as today).
-- Home mrefd is configured with **one** trust anchor: the CA cert. Any
-  incoming TLS peer whose cert chains to that CA — and whose BIRTH
-  identity matches its cert's CN — is accepted, without needing an
-  individual `peers/<IDENTITY>.pub.pem` file.
-
-This is a strict superset of the current model — self-signed peers keep
-working; a CA anchor just adds an additional acceptance path.
-
-**Cost:** the CA private key becomes very valuable (compromise = attacker
-signs any callsign). Revocation of individual field certs requires CRL
-or short-lived certs — neither trivial. Not enabled by default; when
-implemented it will be behind a `MREFD_TLS_TRUST_CA=` env var so
-operators who want per-peer registration keep it.
-
-Design details will land in `docs/tls-interlink-design.md` when this
-work is scheduled.
+Not implemented. For large deployments (hundreds of operators), a hub could
+trust one CA certificate instead of registering each operator's key. The cost
+is a very valuable CA key and harder revocation. If it is built, it will be
+an extra acceptance path next to per-operator registration, not a
+replacement.

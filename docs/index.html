@@ -204,6 +204,8 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
         <li><a href="#interlink-udp">UDP interlink</a></li>
         <li><a href="#interlink-tls">TLS relay: field to hub</a></li>
         <li><a href="#tls-setup">TLS setup, step by step</a></li>
+        <li><a href="#tls-watch">Watching links</a></li>
+        <li><a href="#tls-slow">Slow links: voice vs data</a></li>
       </ol>
     </li>
     <li><a href="#building">Building images</a>
@@ -323,7 +325,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
     <h4>Hub node ("home")</h4>
     <ul>
       <li>Always on, with a stable public IPv4 and/or IPv6 address (VPS, club server, home Pi with port forwarding).</li>
-      <li>Runs a <strong>TLS listener</strong> on TCP 17000 and accepts field nodes whose certificates it has registered.</li>
+      <li>Runs a <strong>TLS listener</strong> on TCP 17000 (the same number as M17 UDP) and accepts field nodes whose certificates it has registered.</li>
       <li>Interlinked with other reflectors, gateways and hubs using static addresses (UDP) or TLS.</li>
       <li>Holds <code>server.crt</code>/<code>server.key</code>, plus one <code>peers/&lt;CALLSIGN&gt;.pub.pem</code> for each <em>operator</em> whose nodes may connect.</li>
     </ul>
@@ -334,7 +336,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
       <li>Portable: Raspberry Pi, NUC, or laptop. Its IP changes from site to site, and it is often behind CGNAT, LTE, Starlink, or hotel Wi-Fi.</li>
       <li><strong>Dials out</strong> to the hub over TLS, so no inbound ports are needed from the internet.</li>
       <li>Announces itself on the site LAN with <strong>mDNS</strong>, so local apps find it without configuration.</li>
-      <li>Holds its operator's <code>client.crt</code>/<code>client.key</code> (one pair per operator, shared by all their nodes) and a pinned copy of the hub's cert (<code>home.pem</code>).</li>
+      <li>Holds its operator's <code>client.crt</code>/<code>client.key</code> (one pair per operator, shared by all their nodes) and a pinned copy of each hub's cert (<code>hubs/M17-HUB.crt</code>).</li>
     </ul>
   </div>
 </div>
@@ -346,11 +348,11 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
   <dt>Reflector</dt><dd>A server that rebroadcasts M17 voice and data among connected clients. Identified by a callsign of the form <code>M17-XYZ</code>.</dd>
   <dt>Module</dt><dd>A lettered channel (A–Z) on a reflector. Clients connect to one module. Each enabled module uses its own processing thread.</dd>
   <dt>Interlink</dt><dd>A peering between two reflectors that shares one or more modules. Both sides must configure it.</dd>
-  <dt>Ham-DHT</dt><dd>A distributed hash table (built on OpenDHT) where reflectors publish their addresses and metadata, so peers can find each other by callsign instead of by IP. M17export is built without it: field nodes are reached only through their hub and are never published.</dd>
+  <dt>Ham-DHT</dt><dd>A distributed hash table (built on OpenDHT) where reflectors publish their addresses and metadata, so peers can find each other by callsign instead of by IP. Field nodes run without it: they are reached only through their hub and are never published. Whether hubs publish on Ham-DHT is not settled yet; the image can be built either way.</dd>
   <dt>dvref.com</dt><dd>The community directory of M17 reflectors and interlink gateways.</dd>
   <dt>mDNS / DNS-SD / Bonjour</dt><dd>Multicast DNS (RFC 6762) and DNS-Based Service Discovery (RFC 6763). Devices on one local network announce and discover services without a DNS server. Bonjour is Apple's name for it; Avahi is the Linux implementation.</dd>
   <dt>MSeven</dt><dd>An Apple-native (iOS/macOS) M17 client. It reads the <code>_m17._udp</code> advertisements and the <code>sites.json</code> reflector directory.</dd>
-  <dt>Identity (TLS)</dt><dd>A field node's name at the hub, <code>CALLSIGN-MODULE</code>, for example <code>W5GGW-B</code>. The callsign always comes from the operator's certificate; the node only chooses the module. One operator certificate serves all of that operator's nodes, one node per module.</dd>
+  <dt>Identity (TLS)</dt><dd>A field node's name at the hub, <code>CALLSIGN-MODULE</code>, for example <code>W5ABC-B</code>. The callsign always comes from the operator's certificate; the node only chooses the module. One operator certificate serves all of that operator's nodes, one node per module.</dd>
 </dl>
 </section>
 
@@ -359,24 +361,28 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
 <h2><span class="num">3</span>Implementation status</h2>
 <div class="callout status">
   <span class="label">Read this first</span>
-  <p>The pieces of this project are at different stages. Check this table before planning a deployment.</p>
+  <p>Check this table before planning a deployment. "Tested" means tested end to end in containers, not yet in long field use.</p>
 </div>
 <div class="table-wrap"><table>
   <thead><tr><th>Component</th><th>State</th><th>Where</th></tr></thead>
   <tbody>
     <tr><td>Container packaging, wizard, compose files</td><td>Working</td><td>this repo, <code>main</code></td></tr>
-    <tr><td>Standalone reflector (UDP clients, UDP interlinks, dashboard; built without Ham-DHT)</td><td>Working</td><td>this repo + pinned <code>mrefd</code> submodule</td></tr>
-    <tr><td>mDNS advertiser <code>m17-advertise</code></td><td>Working, built into the image</td><td><code>tools/m17-advertise/</code></td></tr>
+    <tr><td>Standalone reflector (UDP clients, UDP interlinks, dashboard)</td><td>Working</td><td>this repo + <code>mrefd</code> submodule</td></tr>
+    <tr><td>TLS interlink (field node &rarr; hub relay)</td><td>Working and tested: voice and data in both directions, roaming (a node reconnecting from a new address replaces its old session), dead-link detection by TCP keepalive, clean shutdown, rejection of unregistered keys, live key add / module change / revoke on the hub, and simulated slow WAN links. Always compiled in; no special build.</td><td>fork <code>greggwon/mrefd</code>, branch <code>tls-interlink</code> (the submodule)</td></tr>
+    <tr><td>TLS key scripts</td><td>Working. Also inside the image as <code>tls-genkey</code>, <code>tls-add-peer</code>, <code>tls-add-hub</code>, <code>tls-remove-peer</code>, <code>tls-list-peers</code>, <code>tls-rotate-server-cert</code>, <code>tls-verify</code>.</td><td><code>scripts/tls-*.sh</code></td></tr>
+    <tr><td>Dashboard TLS Links page and TLS badge</td><td>Working</td><td>dashboard image</td></tr>
+    <tr><td>mDNS advertiser <code>m17-advertise</code></td><td>Working, built into the image and on by default. Does not reach the LAN from Docker Desktop on macOS/Windows.</td><td><code>tools/m17-advertise/</code></td></tr>
     <tr><td>Last-heard list overflow fix (<code>users.cpp</code>)</td><td>Applied at build time; upstream PR open</td><td><code>docker/mrefd/Dockerfile</code></td></tr>
-    <tr><td>TLS interlink (field → hub relay)</td><td>Implemented in the fork, being integrated</td><td><code>greggwon/mrefd</code> branch <code>tls-interlink</code></td></tr>
-    <tr><td>TLS certificate helper scripts</td><td>Present</td><td><code>scripts/tls-*.sh</code></td></tr>
-    <tr><td>TLS settings in <code>mrefd.cfg</code></td><td>Not yet. TLS is configured through <code>MREFD_TLS_*</code> environment variables, which the fork reads directly.</td><td><code>reflector.cpp</code> on <code>tls-interlink</code></td></tr>
+    <tr><td>Ham-DHT</td><td><strong>Undecided for hubs.</strong> Field nodes run without it. Both builds work: <code>MREFD_BUILD_DHT=false</code> (default) or <code>true</code>.</td><td><a href="#dht">Ham-DHT settings</a></td></tr>
   </tbody>
 </table></div>
-<div class="callout warn">
-  <span class="label">Submodule pin</span>
-  <p>The <code>mrefd</code> submodule in this repo is pinned to an earlier commit on the fork's <code>tls-interlink</code> branch that <strong>does not include the TLS interlink code</strong>. To build a TLS-capable image, follow <a href="#tls-build">Building with TLS support</a>. A plain build without it gives you a fully working UDP/DHT reflector with mDNS advertising.</p>
-</div>
+<h3>Not implemented</h3>
+<ul>
+  <li><strong>An mrefd admin socket.</strong> It was never built and is no longer needed: removing an operator's key on the hub disconnects their nodes immediately.</li>
+  <li><strong>CA-signed certificates.</strong> Keys are self-signed Ed25519 and trusted by fingerprint. A CA is a possible future addition.</li>
+  <li><strong>IPv6 literals in <code>tls:</code> lines.</strong> Use a DNS name for the hub.</li>
+  <li><strong>Live reload of a field node's <code>tls:</code> lines.</strong> Adding or changing one takes effect only after that node restarts. (The hub side reloads live.)</li>
+</ul>
 </section>
 
 <!-- ================================================================ -->
@@ -387,7 +393,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
 ├── docker-compose.yml           <span class="c"># source-build deployment: mrefd (host net) + optional dashboard</span>
 ├── docker-compose.bridge.yml    <span class="c"># overlay: bridge networking (Docker Desktop, restricted hosts)</span>
 ├── .env.example                 <span class="c"># every setting, documented — copied to .env by `make init`</span>
-├── config/                      <span class="c"># live-editable whitelist / blacklist / interlink (gitignored)</span>
+├── config/                      <span class="c"># live-editable whitelist / blacklist / interlink, tls/ (gitignored)</span>
 ├── deploy/                      <span class="c"># self-contained "pull the image and run" bundle</span>
 │   ├── README.md  BUILD.md  CERTS.md  INTERLINK-CHOICES.md
 │   ├── docker-compose.yml       <span class="c"># pulls ghcr.io/greggwon/mrefd, mounts config/tls</span>
@@ -399,16 +405,16 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
 │   └── dashboard/               <span class="c"># lighttpd + php-fpm serving the upstream PHP dashboard</span>
 ├── docs/
 │   ├── index.html               <span class="c"># this manual</span>
-│   └── tls-interlink-design.md  <span class="c"># TLS wire protocol and design</span>
+│   └── tls-interlink-design.md  <span class="c"># TLS interlink protocol, as built</span>
 ├── scripts/
 │   ├── init.sh                  <span class="c"># interactive setup wizard (`make init`)</span>
-│   └── tls-*.sh                 <span class="c"># genkey, add/remove/list peers, rotate, verify</span>
+│   └── tls-*.sh                 <span class="c"># genkey, add-peer, add-hub, remove-peer, list-peers, rotate, verify</span>
 ├── tools/m17-advertise/         <span class="c"># Go source for the mDNS advertiser</span>
 └── mrefd/                       <span class="c"># git submodule → github.com/greggwon/mrefd</span></code></pre>
 <p>There are two ways to deploy, and each has its own compose file:</p>
 <ul>
   <li><strong><code>deploy/</code></strong> is the operator bundle. It pulls a prebuilt image from GitHub Container Registry, so no build tools or source tree are needed. Its compose file also mounts <code>config/tls/</code> for certificates. Use this for most field and hub nodes.</li>
-  <li><strong>Repository root</strong> is the developer path. It builds images from the submodule source, adds the optional web dashboard, and provides the <code>make</code> targets.</li>
+  <li><strong>Repository root</strong> is the developer path. It builds images from the submodule source, adds the optional web dashboard, and provides the <code>make</code> targets. Its compose file also mounts <code>config/tls/</code>.</li>
 </ul>
 </section>
 
@@ -430,7 +436,7 @@ sudo apt-get install -y git make</code></pre>
 <ul>
   <li>Docker <code>buildx</code> (included in current Docker Engine and Docker Desktop). QEMU emulation for cross-arch builds is installed automatically on first use.</li>
   <li><strong>Go 1.25 or newer</strong>, only if you want to run <code>m17-advertise</code> outside the container (for example, on a Mac). On macOS: <code>brew install go</code>.</li>
-  <li><code>openssl</code>, for the TLS certificate scripts. It is preinstalled on Linux and macOS.</li>
+  <li><code>openssl</code> 1.1.1 or newer, for the TLS key scripts. Linux has it. On macOS the built-in LibreSSL can't make Ed25519 keys; <code>brew install openssl@3</code> and the scripts find it on their own. Or run the scripts from the image (see <a href="#tls-setup">TLS setup</a>).</li>
 </ul>
 
 <h3>Before you go on the air</h3>
@@ -455,12 +461,10 @@ cd M17export/deploy</code></pre>
   <li><strong>Create your configuration.</strong>
 <pre><code>cp mrefd.env.example mrefd.env
 nano mrefd.env</code></pre>
-  At a minimum, set the five required values:
+  Only two values are required:
 <pre><code>MREFD_CALLSIGN=M17-XYZ
-MREFD_MODULES=BCD
-MREFD_COUNTRY=US
-MREFD_EMAIL=you@example.net
-MREFD_DASHBOARD_URL=https://reflector.example.net</code></pre>
+MREFD_MODULES=B,C,D</code></pre>
+  Also fill in <code>MREFD_COUNTRY</code>, <code>MREFD_EMAIL</code> and <code>MREFD_DASHBOARD_URL</code>. They go into the mDNS record, and they become required if you turn Ham-DHT on.
   If this reflector should be easy to recognize on a local network, also set <code>MREFD_ADVERTISE_NAME</code> (see <a href="#mdns">mDNS discovery</a>).</li>
 
   <li><strong>Check the list files.</strong> <code>config/mrefd.whitelist</code>, <code>config/mrefd.blacklist</code>, and <code>config/mrefd.interlink</code> must exist as <em>files</em>. If they are missing, Docker creates directories in their place and mrefd fails to start.
@@ -497,7 +501,7 @@ make logs-mrefd       <span class="c"># follow reflector logs</span></code></pre
 
 <h3 id="verify">Verifying it works</h3>
 <p>A healthy start shows lines like these in the log:</p>
-<pre><code>entrypoint: starting mrefd as M17-XYZ on modules BCD, UDP 17000
+<pre><code>entrypoint: starting mrefd as M17-XYZ on modules B,C,D, UDP 17000
 Reflector M17-XYZ started and listening
 entrypoint: starting Bonjour advertiser for m17-xyz
 m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
@@ -521,15 +525,16 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 <h2><span class="num">7</span>Configuration reference</h2>
 <p>All settings are environment variables. Put them in <code>.env</code> (source build) or <code>deploy/mrefd.env</code> (prebuilt). Each time the container starts, <code>docker/mrefd/entrypoint.sh</code> checks the required values, renders <code>/etc/mrefd/mrefd.cfg</code>, and refuses to start if a value is a placeholder or malformed. After changing a value, apply it with <code>make restart</code> or <code>docker compose up -d</code>.</p>
 
-<h3>Identity (required)</h3>
+<h3>Identity</h3>
+<p><code>MREFD_CALLSIGN</code> and <code>MREFD_MODULES</code> are always required. The next three are required only when Ham-DHT is on.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Variable</th><th>Example</th><th>Meaning</th></tr></thead>
 <tbody>
 <tr><td><code>MREFD_CALLSIGN</code></td><td><code>M17-XYZ</code></td><td>Reflector callsign. Must match <code>^M17-[A-Z0-9]{3}$</code>.</td></tr>
-<tr><td><code>MREFD_MODULES</code></td><td><code>BCD</code></td><td>Enabled modules: uppercase letters, no separators.</td></tr>
-<tr><td><code>MREFD_COUNTRY</code></td><td><code>US</code></td><td>ISO 3166-1 alpha-2 country code.</td></tr>
-<tr><td><code>MREFD_EMAIL</code></td><td><code>ops@club.org</code></td><td>Admin contact.</td></tr>
-<tr><td><code>MREFD_DASHBOARD_URL</code></td><td><code>https://m17.club.org</code></td><td>Dashboard URL, advertised in the mDNS TXT record.</td></tr>
+<tr><td><code>MREFD_MODULES</code></td><td><code>B,C,D</code></td><td>Enabled modules. <code>B,C,D</code>, <code>BCD</code>, <code>"b c d"</code> and lowercase are all accepted; output shows <code>B,C,D</code>.</td></tr>
+<tr><td><code>MREFD_COUNTRY</code></td><td><code>US</code></td><td>ISO 3166-1 alpha-2 country code. Required only with Ham-DHT on.</td></tr>
+<tr><td><code>MREFD_EMAIL</code></td><td><code>ops@club.org</code></td><td>Admin contact. Required only with Ham-DHT on.</td></tr>
+<tr><td><code>MREFD_DASHBOARD_URL</code></td><td><code>https://m17.club.org</code></td><td>Dashboard URL, advertised in the mDNS TXT record. Required only with Ham-DHT on.</td></tr>
 <tr><td><code>MREFD_SPONSOR</code></td><td><code>Tulsa ARC</code></td><td>Optional sponsoring club. Must not contain <code>=</code>.</td></tr>
 </tbody></table></div>
 
@@ -537,7 +542,7 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 <div class="table-wrap"><table>
 <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td><em>blank</em></td><td>Modules that allow encrypted streams. Blank means encryption is refused on every module.</td></tr>
+<tr><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td><em>blank</em></td><td>Modules that allow encrypted streams, in any of the module forms above. Blank means encryption is refused on every module.</td></tr>
 <tr><td><code>MREFD_LISTEN_ONLY_ALLOW_ENCRYPT</code></td><td><code>false</code></td><td>Allow listen-only clients on encryption-enabled modules.</td></tr>
 </tbody></table></div>
 <div class="callout warn"><span class="label">Regulatory</span><p>Most amateur radio services prohibit encrypted transmissions. Know your local rules before enabling this. Interlinked peers must also agree on encryption for each shared module, or streams are silently dropped.</p></div>
@@ -549,19 +554,22 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 <tr><td><code>MREFD_PORT</code></td><td><code>17000</code></td><td>UDP port mrefd binds. TLS uses the same number on TCP unless overridden.</td></tr>
 <tr><td><code>MREFD_IPV4_BIND</code></td><td><code>0.0.0.0</code></td><td>IPv4 bind address. Blank makes the reflector IPv6-only.</td></tr>
 <tr><td><code>MREFD_IPV6_BIND</code></td><td><code>::</code></td><td>IPv6 bind address. Blank makes the reflector IPv4-only.</td></tr>
-<tr><td><code>MREFD_IPV4_EXT</code> / <code>MREFD_IPV6_EXT</code></td><td><em>auto</em></td><td>Addresses advertised over mDNS in place of the auto-detected ones. Leave blank unless the host is multi-homed or behind unusual NAT.</td></tr>
+<tr><td><code>MREFD_IPV4_EXT</code> / <code>MREFD_IPV6_EXT</code></td><td><em>auto</em></td><td>Addresses advertised over mDNS in place of the auto-detected ones. Leave blank unless the host is multi-homed or behind unusual NAT. A DHT build needs <code>MREFD_IPV4_EXT</code> set to start without internet access.</td></tr>
 <tr><td><code>M17_PORT</code>, <code>DASHBOARD_PORT</code></td><td>17000, 8080</td><td>Host-side ports (source-build compose). In host networking they are reminders for your firewall rules. In bridge mode they are the actual published ports.</td></tr>
 </tbody></table></div>
 
-<h3>Ham-DHT (not used)</h3>
-<p>M17export is built and run without Ham-DHT. Field nodes reach the wider network only through their TLS link to a hub and are never published, and hubs interlink using static addresses or TLS. The settings remain only so the build and runtime agree; leave both <code>false</code>.</p>
+<h3 id="dht">Ham-DHT</h3>
+<p>Field nodes run without Ham-DHT: they reach the wider network only through their TLS link to a hub and are never published. Whether hubs should publish on Ham-DHT is not settled yet, so both builds are supported. The default is off.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
 <tbody>
 <tr><td><code>MREFD_BUILD_DHT</code></td><td><code>false</code></td><td>Build-time: compile DHT support into mrefd.</td></tr>
-<tr><td><code>MREFD_DHT_ENABLED</code></td><td><code>false</code></td><td>Run-time: write DHT settings into <code>mrefd.cfg</code>. Must match <code>MREFD_BUILD_DHT</code>.</td></tr>
+<tr><td><code>MREFD_DHT_ENABLED</code></td><td><code>false</code></td><td>Run-time: write DHT settings into <code>mrefd.cfg</code>. Must match <code>MREFD_BUILD_DHT</code>: a DHT build won't run with this set to <code>false</code>. With it on, <code>MREFD_COUNTRY</code>, <code>MREFD_EMAIL</code> and <code>MREFD_DASHBOARD_URL</code> are required.</td></tr>
+<tr><td><code>MREFD_BOOTSTRAP</code></td><td><code>xrf757.openquad.net</code></td><td>DHT bootstrap node.</td></tr>
+<tr><td><code>DHT_PORT</code></td><td><code>17171</code></td><td>UDP port for DHT traffic (firewall reminder; published port in bridge mode).</td></tr>
 <tr><td><code>MREFD_BUILD_DEBUG</code></td><td><code>false</code></td><td>Build-time: debug symbols and verbose packet dumps.</td></tr>
 </tbody></table></div>
+<p>A DHT build refuses to start without internet access unless <code>MREFD_IPV4_EXT</code> is set.</p>
 
 <h3>mDNS advertiser</h3>
 <p>The container announces the reflector on the local network as a <code>_m17._udp</code> service, so M17 apps on the same Wi-Fi or Ethernet, such as MSeven, list it automatically and connect with a tap. No one has to type an address, and no internet connection or DNS server is needed. That is what makes a field node usable at a shelter or event the moment it powers up. These settings control what the announcement says. <a href="#mdns">Section 9, mDNS discovery for local support networks</a>, explains how it works, why it suits support networks, and how to test it.</p>
@@ -576,16 +584,22 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 </tbody></table></div>
 
 <h3>TLS interlink</h3>
-<p>The TLS-capable build of the fork reads these variables directly at startup. They are not rendered into <code>mrefd.cfg</code>. The TLS layer activates only when <code>mrefd.interlink</code> contains a <code>key:</code> or <code>tls:</code> entry.</p>
+<p>TLS is always compiled in. It is configured by <code>key:</code> and <code>tls:</code> lines in <code>mrefd.interlink</code> (see <a href="#tls-setup">TLS setup</a>) plus these optional variables. There are no TLS settings in <code>mrefd.cfg</code>. mrefd reads the variables at startup, so change them with a restart.</p>
+<p><strong>You normally set none of these.</strong> The entrypoint uses <code>config/tls/server.crt</code>/<code>server.key</code> and <code>config/tls/client.crt</code>/<code>client.key</code> automatically when they exist. The four cert/key variables are only for pointing somewhere else.</p>
 <div class="table-wrap"><table>
-<thead><tr><th>Variable</th><th>Used on</th><th>Meaning</th></tr></thead>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
 <tbody>
-<tr><td><code>MREFD_TLS_SERVER_CERT</code> / <code>_KEY</code></td><td>Hub</td><td>PEM cert and key presented to incoming field nodes.</td></tr>
-<tr><td><code>MREFD_TLS_CLIENT_CERT</code> / <code>_KEY</code></td><td>Field</td><td>PEM cert and key presented when dialing a hub. They also sign the BIRTH message.</td></tr>
-<tr><td><code>MREFD_TLS_PORT</code></td><td>Hub</td><td>TCP listen port. Defaults to <code>MREFD_PORT</code>.</td></tr>
-<tr><td><code>MREFD_TLS_BIND_ADDR</code></td><td>Hub</td><td>Listener bind address. Defaults to <code>MREFD_IPV6_BIND</code>, then <code>0.0.0.0</code>.</td></tr>
-<tr><td><code>MREFD_TLS_TIMESTAMP_SKEW</code></td><td>Hub</td><td>Allowed clock difference for BIRTH timestamps, in seconds. Default 300. Field nodes need roughly correct clocks: use NTP, or GPS time when offline.</td></tr>
+<tr><td><code>MREFD_TLS_SERVER_CERT</code> / <code>MREFD_TLS_SERVER_KEY</code></td><td><code>/etc/mrefd/tls/server.crt</code> / <code>.key</code> if present</td><td>Hub: certificate and key shown to field nodes.</td></tr>
+<tr><td><code>MREFD_TLS_CLIENT_CERT</code> / <code>MREFD_TLS_CLIENT_KEY</code></td><td><code>/etc/mrefd/tls/client.crt</code> / <code>.key</code> if present</td><td>Field node: certificate and key shown to the hub. The key also signs the BIRTH message.</td></tr>
+<tr><td><code>MREFD_TLS_PORT</code></td><td><code>MREFD_PORT</code> (17000)</td><td>Hub: TCP listen port.</td></tr>
+<tr><td><code>MREFD_TLS_BIND_ADDR</code></td><td><code>MREFD_IPV6_BIND</code>, else <code>0.0.0.0</code></td><td>Hub: listener bind address.</td></tr>
+<tr><td><code>MREFD_TLS_TIMESTAMP_SKEW</code></td><td><code>300</code></td><td>Hub: allowed clock difference for BIRTH timestamps, in seconds. Keep both ends on NTP.</td></tr>
+<tr><td><code>MREFD_TLS_MAX_AUDIO_MS</code></td><td><code>200</code></td><td>Voice older than this, still waiting in the send queue, is dropped instead of sent late. See <a href="#tls-slow">Slow links</a>.</td></tr>
+<tr><td><code>MREFD_TLS_DATA_QUEUE_KB</code></td><td><code>1024</code></td><td>Cap on queued data (packet mode) per link. Data is never dropped for age.</td></tr>
+<tr><td><code>MREFD_TLS_KEEPALIVE</code></td><td><code>60,30,8</code></td><td>TCP keepalive as <code>idle,interval,count</code> in seconds, or <code>off</code>. The default notices a dead link in about 5 minutes.</td></tr>
+<tr><td><code>MREFD_TLS_USER_TIMEOUT</code></td><td><code>0</code> (off)</td><td>TCP user timeout in seconds: drop the link when sent data stays unacknowledged this long.</td></tr>
 </tbody></table></div>
+<p>If a key file exists but the container user (uid 1000) can't read it, the container stops and prints the <code>chown</code> command to run on the host.</p>
 
 <h3>Dashboard (source build, optional)</h3>
 <div class="table-wrap"><table>
@@ -623,6 +637,7 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 <tbody>
 <tr><td>M17 clients and UDP interlinks</td><td>UDP</td><td>17000</td><td>Inbound from internet / LAN</td><td>All nodes. Field nodes need it on the LAN only.</td></tr>
 <tr><td>TLS interlink</td><td>TCP</td><td>17000</td><td>Inbound from internet</td><td>Hubs only. Field nodes only dial out.</td></tr>
+<tr><td>Ham-DHT (only with DHT on)</td><td>UDP</td><td>17171</td><td>Inbound from internet</td><td>Hubs that publish on Ham-DHT (<code>DHT_PORT</code>)</td></tr>
 <tr><td>mDNS / Bonjour</td><td>UDP</td><td>5353</td><td>LAN multicast only</td><td>Nodes that advertise. Allow it in the host firewall; never forward it on the router.</td></tr>
 <tr><td>Dashboard</td><td>TCP</td><td>8080</td><td>Inbound</td><td>Optional</td></tr>
 </tbody></table></div>
@@ -915,77 +930,114 @@ sudo tcpdump -i any -n udp port 5353</code></pre>
 
 <h3 id="interlink-udp">UDP interlink (community standard)</h3>
 <pre><code><span class="c"># Static: literal IP and port</span>
-M17-URF   45.32.11.22  17000  BCD
+M17-URF   45.32.11.22  17000  B,C,D
 <span class="c"># Pre-1.0 "legacy L" peer</span>
-M17-QQQL  44.45.45.100 ABC</code></pre>
+M17-QQQL  44.45.45.100 A,B,C</code></pre>
 <p>Use UDP between fixed public reflectors, for example a hub peering with other dvref-listed reflectors or a URFD gateway. It needs no certificates. Upstream mrefd accepts only literal IP addresses or DHT lookups in this file, not hostnames, so it cannot follow a field node whose address keeps changing. That gap is what the TLS relay fills.</p>
 
 <h3 id="interlink-tls">TLS relay: field node to hub</h3>
-<p>The fork adds a TLS-over-TCP interlink. The <strong>field node dials out</strong> to the hub, presents its operator's Ed25519 certificate, and sends a signed <strong>BIRTH</strong> message naming the one module it is linking. <strong>The key decides who the node is.</strong> The hub looks the presented certificate up by its key fingerprint, takes the callsign from that certificate's CN, and checks that the asserted module is one that key may use. It then verifies the BIRTH signature and timestamp, and installs the node as <code>CALLSIGN-MODULE</code> <strong>using the session's source address</strong>. After that, M17 stream and packet frames flow inside the TLS session, with PING/PONG keepalives every 10 seconds.</p>
-<p>This works the way a radio connects to a reflector. An operator has <strong>one certificate</strong>, and each of their nodes says which module it is linking, so <code>W5GGW-B</code> and <code>W5GGW-C</code> are two nodes sharing the <code>W5GGW</code> certificate. The hub registers that key once, with the set of modules its nodes may assert.</p>
+<p>The fork adds a TLS-over-TCP interlink, always compiled in. The <strong>field node dials out</strong> to the hub on TCP, on the same port number as M17 UDP (17000 by default). It presents its operator's Ed25519 certificate and, after the TLS handshake, sends a signed <strong>BIRTH</strong> message (timestamp and nonce) naming the one module it is linking. <strong>The key decides who the node is.</strong> The hub looks the certificate up by its fingerprint (SPKI SHA-256), takes the callsign from the matching registration, and checks that the module is one that key may use. It then verifies the BIRTH signature and timestamp and installs the node as <code>CALLSIGN-MODULE</code>, for example <code>W5ABC-B</code>. After that, M17 voice and data frames flow inside the TLS session.</p>
+<p>This works the way a radio connects to a reflector. An operator has <strong>one key</strong>, named with their bare callsign and shared by all their nodes, and each node says which module it links. <code>W5ABC-B</code> and <code>W5ABC-C</code> are two nodes holding the <code>W5ABC</code> key. The hub registers that key once, with the modules its nodes may use. The hub has one key of its own, named with its reflector callsign.</p>
 <ul>
-  <li>The field node's IP can change at every site. Neither side declares it ahead of time.</li>
+  <li>The field node's IP can change at every site. Neither side declares it ahead of time. If a node reconnects from a new address, the newest connection wins.</li>
   <li>The field node needs no inbound port, so it works behind CGNAT, LTE, and Starlink.</li>
   <li>Field nodes are never published anywhere; only their hub knows them.</li>
-  <li>The field node trusts the hub by <strong>pinning</strong> the hub's server certificate. No public CA is involved.</li>
-  <li>Each reconnect is a fresh BIRTH, so a dropped link recovers on its own.</li>
+  <li>The field node trusts the hub by <strong>pinning</strong> the hub's certificate file. Certificates are self-signed; no CA is involved.</li>
+  <li>The node keeps the link up by itself. Each reconnect is a fresh BIRTH. A link that dies silently is detected by TCP keepalive (about 5 minutes by default, see <code>MREFD_TLS_KEEPALIVE</code>).</li>
+  <li>Clocks on both ends must agree within <code>MREFD_TLS_TIMESTAMP_SKEW</code> (300 s). Use NTP, or GPS time when offline.</li>
 </ul>
-<p>The wire format, message types, reject codes, and threat model are in <a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>. For help deciding whether a particular peering needs TLS, see <a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>.</p>
+<p>The protocol as built (message types, reject codes, threat model) is in <a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>. For deciding whether a peering needs TLS at all, see <a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>.</p>
 
-<h3 id="tls-build">Building with TLS support</h3>
-<p>As noted in <a href="#status">Implementation status</a>, the TLS code is on the fork's <code>tls-interlink</code> branch, ahead of the commit this repo pins. To build an image that includes it:</p>
-<pre><code>cd mrefd
-git fetch origin
-git checkout origin/tls-interlink  <span class="c"># TLS interlink implementation</span>
-cd ..
-make build-local                   <span class="c"># or a multi-arch push, see Building images</span></code></pre>
-<p>When mrefd starts with TLS entries present, the log shows <code>TLS interlink layer active.</code></p>
+<h3 id="tls-files">Files and interlink lines</h3>
+<p>The host's <code>config/tls/</code> is mounted read-only at <code>/etc/mrefd/tls</code>, by both the root <code>docker-compose.yml</code> and <code>deploy/docker-compose.yml</code>. The scripts write everything there:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>On</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>config/tls/server.crt</code>, <code>server.key</code></td><td>Hub</td><td>The hub's key, named with its reflector callsign (<code>M17-HUB</code>).</td></tr>
+<tr><td><code>config/tls/peers/&lt;CALL&gt;.pub.pem</code></td><td>Hub</td><td>One registered certificate per field operator.</td></tr>
+<tr><td><code>config/tls/client.crt</code>, <code>client.key</code></td><td>Field</td><td>The operator's key, named with their bare callsign (<code>W5ABC</code>). The same pair goes on every node they run.</td></tr>
+<tr><td><code>config/tls/hubs/&lt;M17-XXX&gt;.crt</code></td><td>Field</td><td>Pinned certificate for each hub this node links to.</td></tr>
+</tbody></table></div>
+<p>The scripts also write the matching lines in <code>config/mrefd.interlink</code>. Modules may be written <code>B,C</code>, <code>BC</code> or <code>"b c"</code>.</p>
+<pre><code><span class="c"># Hub: one line per operator</span>
+W5ABC    B,C  key:/etc/mrefd/tls/peers/W5ABC.pub.pem
+
+<span class="c"># Field node: one line per hub, exactly one module</span>
+M17-HUB  B    tls:hub.example.org:17000  servercert:/etc/mrefd/tls/hubs/M17-HUB.crt</code></pre>
+<p>The hub reloads its lines within seconds, with no restart. Adding the first key starts the TLS listener. Changing a key's modules disconnects that operator's nodes on the removed modules. Removing a key disconnects all of its nodes immediately. A field node's <code>tls:</code> lines take effect when the node restarts. Use a DNS name for the hub, not an IPv6 literal.</p>
 
 <h3 id="tls-setup">TLS setup, step by step</h3>
-<p>The example below uses a hub <code>M17-HUB</code> at <code>hub.example.org</code> and operator <code>W5GGW</code>, whose nodes may use modules B, C, and D. One node links module B and another links module C, sharing one certificate. Paths assume the <code>deploy/</code> layout, where <code>config/tls/</code> is mounted read-only at <code>/etc/mrefd/tls/</code>.</p>
-<div class="callout note"><span class="label">OpenSSL on macOS</span><p>The certificate scripts need OpenSSL 1.1.1 or newer. macOS's built-in <code>/usr/bin/openssl</code> is LibreSSL, which can't make Ed25519 certificates; the scripts detect it and stop. Install Homebrew's <code>openssl@3</code> and run them with <code>OPENSSL=$(brew --prefix openssl@3)/bin/openssl</code>. Linux hosts need nothing extra.</p></div>
-<div class="callout warn"><span class="label">Source-build compose</span><p>The root <code>docker-compose.yml</code> does not mount <code>config/tls/</code> yet. If you deploy from source, add <code>- ./config/tls:/etc/mrefd/tls:ro</code> to the <code>mrefd</code> service's volumes.</p></div>
-
+<p>The example uses hub <code>M17-HUB</code> at <code>hub.example.org</code> and field operator <code>W5ABC</code>, whose nodes may use modules B and C. Run the scripts from the directory that holds <code>config/</code> (the repository root, or <code>deploy/</code>). Every script takes <code>--config &lt;dir&gt;</code> (default <code>./config</code>), accepts lowercase callsigns and modules, and prints <code>--help</code>.</p>
 <ol class="steps">
-  <li><strong>Hub: create the server identity.</strong>
-<pre><code>scripts/tls-genkey.sh --identity M17-HUB --role home --out deploy/config/tls/server</code></pre>
-  This writes <code>server.crt</code> and <code>server.key</code> (mode 0600) and prints the SPKI SHA-256 fingerprint. Publish <code>server.crt</code> and its fingerprint somewhere field operators can trust: an HTTPS site, a git repo, or in person.</li>
+  <li><strong>Hub, once: make the hub key.</strong>
+<pre><code>scripts/tls-genkey.sh --role hub --identity M17-HUB</code></pre>
+  It prints the key's fingerprint. Give <code>config/tls/server.crt</code> and the fingerprint to your field operators. Open <strong>TCP 17000</strong> inbound on the hub's firewall, as well as UDP 17000 as usual.</li>
 
-  <li><strong>Hub: enable the listener.</strong> In <code>mrefd.env</code>:
-<pre><code>MREFD_TLS_SERVER_CERT=/etc/mrefd/tls/server.crt
-MREFD_TLS_SERVER_KEY=/etc/mrefd/tls/server.key</code></pre>
-  Open <strong>TCP 17000</strong> inbound on the hub's firewall.</li>
+  <li><strong>Field operator, once, on any machine: make your key.</strong>
+<pre><code>scripts/tls-genkey.sh --identity W5ABC</code></pre>
+  Send <code>config/tls/client.crt</code> (never the <code>.key</code>) to the hub operator, with the modules your nodes will use. Copy <code>config/tls/</code> to each node you run.</li>
 
-  <li><strong>Operator: create your certificate, once.</strong> Its CN is your bare callsign, with no module.
-<pre><code>scripts/tls-genkey.sh --identity W5GGW --role field --out deploy/config/tls/client</code></pre>
-  Copy the same <code>client.crt</code>/<code>client.key</code> pair to every node you run. Send <code>client.crt</code> (public) and its fingerprint to the hub operator, along with the modules your nodes will use. <code>client.key</code> stays on your own nodes.</li>
+  <li><strong>Hub, for each field operator: register their key.</strong>
+<pre><code>scripts/tls-add-peer.sh --cert W5ABC.crt --modules B,C</code></pre>
+  <code>W5ABC.crt</code> is the <code>client.crt</code> the operator sent, under any file name; the callsign is read from it. This takes effect live, with no restart. Any node holding the <code>W5ABC</code> key may now link module B or C.</li>
 
-  <li><strong>Each node: pin the hub and say which module it links.</strong> Save the hub's <code>server.crt</code> as <code>config/tls/home.pem</code>, and check its fingerprint against the published value. Then set the following in <code>mrefd.env</code>:
-<pre><code>MREFD_TLS_CLIENT_CERT=/etc/mrefd/tls/client.crt
-MREFD_TLS_CLIENT_KEY=/etc/mrefd/tls/client.key</code></pre>
-  Add one line to that node's <code>config/mrefd.interlink</code>, naming the hub and the <strong>one</strong> module this node links:
-<pre><code>M17-HUB  B  tls:hub.example.org:17000  servercert:/etc/mrefd/tls/home.pem</code></pre>
-  Your second node is identical except for <code>C</code> in place of <code>B</code>. At the hub they appear as <code>W5GGW-B</code> and <code>W5GGW-C</code>.</li>
+  <li><strong>Each field node: link to the hub.</strong>
+<pre><code>scripts/tls-add-hub.sh --hub M17-HUB --host hub.example.org --module B --cert M17-HUB.crt
+make restart        <span class="c"># or: docker compose restart mrefd</span></code></pre>
+  <code>M17-HUB.crt</code> is the hub's <code>server.crt</code>, under any file name. A second node is the same with <code>--module C</code>. The hub sees them as <code>W5ABC-B</code> and <code>W5ABC-C</code>.</li>
 
-  <li><strong>Hub: register the operator's key, once.</strong>
-<pre><code>scripts/tls-add-peer.sh --identity W5GGW --cert /path/to/received/client.crt --modules BCD</code></pre>
-  This checks that the certificate's CN is <code>W5GGW</code>, copies it to <code>config/tls/peers/W5GGW.pub.pem</code>, and appends this line:
-<pre><code>W5GGW  BCD  key:/etc/mrefd/tls/peers/W5GGW.pub.pem</code></pre>
-  Any of that operator's nodes may now connect asserting B, C, or D. A node asserting any other module is refused.</li>
-
-  <li><strong>Start or restart both nodes and verify.</strong> Restart, because the <code>MREFD_TLS_*</code> variables are read only at startup. Then check the connection:
-<pre><code>scripts/tls-verify.sh --host hub.example.org --port 17000 --expect-fingerprint &lt;FP&gt;
-scripts/tls-list-peers.sh            <span class="c"># on the hub</span></code></pre></li>
+  <li><strong>Check it.</strong> The log (<code>make logs</code> or <code>docker compose logs -f</code>) shows <code>link UP</code> on both ends, and the dashboard's <strong>TLS Links</strong> page lists the link. On either end:
+<pre><code>scripts/tls-list-peers.sh
+scripts/tls-verify.sh --host hub.example.org --expect-fingerprint &lt;FP&gt;   <span class="c"># from a field node: is the hub reachable, and is it the right hub?</span></code></pre></li>
 </ol>
 
-<h4>Ongoing certificate management</h4>
+<h4>Changes later</h4>
 <ul>
-  <li><strong>Retire one node:</strong> remove its module letter from the operator's line on the hub (<code>BCD</code> → <code>BD</code>). mrefd reloads the file, and that node is refused on its next connect while the operator's other nodes carry on.</li>
-  <li><strong>Revoke an operator:</strong> <code>scripts/tls-remove-peer.sh --identity W5GGW</code> removes the cert and the interlink line, and drops the live sessions of all of that operator's nodes.</li>
-  <li><strong>Rotate the hub certificate:</strong> <code>scripts/tls-rotate-server-cert.sh --identity M17-HUB</code>, then redistribute <code>server.crt</code> to every field node.</li>
-  <li><strong>Clocks:</strong> BIRTH timestamps must be within <code>MREFD_TLS_TIMESTAMP_SKEW</code> (default ±300 s). Keep field nodes on NTP, or on a GPS time source when offline.</li>
+  <li><strong>Revoke an operator:</strong> <code>scripts/tls-remove-peer.sh --identity W5ABC</code> on the hub. Live: their nodes are disconnected at once.</li>
+  <li><strong>Change an operator's modules:</strong> run <code>tls-add-peer.sh</code> again with the new <code>--modules</code>. Live: nodes on removed modules are disconnected.</li>
+  <li><strong>Rotate the hub key:</strong> <code>scripts/tls-rotate-server-cert.sh --identity M17-HUB</code>, restart the hub, and have every field operator rerun <code>tls-add-hub.sh</code> with the new certificate and restart their nodes.</li>
+  <li><strong>Remove a hub link from a field node:</strong> <code>scripts/tls-add-hub.sh --hub M17-HUB --remove</code>, then restart the node.</li>
 </ul>
-<p>Full certificate procedures, including generating certs with plain <code>openssl</code>, are in <a href="../deploy/CERTS.md">deploy/CERTS.md</a>.</p>
+
+<h4>Running the scripts</h4>
+<p>The scripts need OpenSSL 1.1.1 or newer for Ed25519. On macOS, the built-in <code>/usr/bin/openssl</code> is LibreSSL and can't do it; the scripts find Homebrew's <code>openssl@3</code> automatically if it is installed (<code>brew install openssl@3</code>). Linux needs nothing extra.</p>
+<p>Without a usable openssl, run the same scripts from the image. They are installed there as <code>tls-genkey</code>, <code>tls-add-peer</code>, <code>tls-add-hub</code>, <code>tls-remove-peer</code>, <code>tls-list-peers</code>, <code>tls-rotate-server-cert</code> and <code>tls-verify</code>, and default to <code>--config /etc/mrefd</code>:</p>
+<pre><code>docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/mrefd" \
+    --entrypoint tls-genkey ghcr.io/greggwon/mrefd:latest --identity W5ABC</code></pre>
+<p>Key and certificate details, including making them with plain <code>openssl</code>, are in <a href="../deploy/CERTS.md">deploy/CERTS.md</a>.</p>
+
+<h3 id="tls-watch">Watching links</h3>
+<p><strong>Log lines.</strong> Each end logs <code>link UP</code> when a link comes up, and <code>link DOWN</code> when it drops:</p>
+<pre><code>TLS interlinks: link UP: to 'M17-HUB' at 203.0.113.17:17000 as 'W5ABC-B' (module B)
+TLS interlinks: link DOWN: to 'M17-HUB' at 203.0.113.17:17000 after 2h14m: no response from peer (TCP keepalive/retransmit timed out; link or peer is down) (frames in 18234, out 17990, stale voice dropped 0); reconnecting</code></pre>
+<p>The reason is in plain English: no response (keepalive timed out), connection reset by peer, peer sent DISCONNECT, DNS lookup failed, connection refused, or <code>hub rejected us: …</code> with the cause (key not registered, module not allowed, clocks differ). Connection attempts are logged for the first three tries and then every tenth, with how long the link has been down. Two more messages report a slow link: <code>is falling behind</code> (once per transmission, when voice delay is growing) and <code>can't keep up with voice: dropped N stale voice frame(s)</code> (every 10 s while voice is being dropped). See <a href="#tls-slow">Slow links</a>.</p>
+<p><strong>Dashboard.</strong> The <strong>TLS Links (up/total)</strong> page lists each link with its state (connected, connecting, retrying, disconnected), last error, frame counts and voice queue figures. A TLS badge appears on every page:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Badge</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Green</td><td>Link up. A steady voice delay is still green.</td></tr>
+<tr><td>Yellow</td><td>Voice falling behind: the delay is growing.</td></tr>
+<tr><td>Red</td><td>Voice can't keep up (stale voice is being dropped; use data), or the link is down.</td></tr>
+<tr><td>Grey</td><td>Waiting for nodes to connect.</td></tr>
+</tbody></table></div>
+<p>The same figures are in the <code>TLS</code> object of <code>mrefd.json</code> (<code>Listening</code>, <code>Registrations</code>, and <code>Links[]</code> with <code>State</code>, <code>LastError</code>, <code>FramesIn</code>/<code>FramesOut</code>, <code>VoiceDropped</code>, <code>VoiceDroppedRecent</code>, <code>VoiceQueue</code>, <code>VoiceQueuePeak</code>, <code>VoiceLateMs</code>, <code>VoiceTrend</code>).</p>
+<p><strong>From a shell:</strong> <code>scripts/tls-list-peers.sh</code> shows the registered keys or hub links and their live state (<code>--json</code> for machine output).</p>
+
+<h3 id="tls-slow">Slow links: voice vs data</h3>
+<p>Voice over the TLS link needs about <strong>31 kbit/s each way</strong>. Each 61-byte M17 frame becomes about 150 bytes with TLS, TCP and IP overhead.</p>
+<p>mrefd keeps voice current. Voice that has waited in the send queue longer than <code>MREFD_TLS_MAX_AUDIO_MS</code> (200 ms) is dropped, not sent late. Network latency alone never causes drops: a link with a long but steady delay is fine. Only a link slower than the voice makes the queue grow. Data (packet mode, M17P) is never dropped for age; it is capped at <code>MREFD_TLS_DATA_QUEUE_KB</code>. Control messages go first, then voice, then data.</p>
+<p>There is no connect timeout. TCP retries run their full course, so slow or lossy links still connect.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Simulated link</th><th>Voice delivered</th></tr></thead>
+<tbody>
+<tr><td>64 kbit/s, 300 ms delay</td><td>100%</td></tr>
+<tr><td>48 kbit/s, 600 ms delay</td><td>100%</td></tr>
+<tr><td>40 kbit/s</td><td>100%, delay steady</td></tr>
+<tr><td>24 kbit/s</td><td>about 75%</td></tr>
+<tr><td>12 kbit/s</td><td>about 55–60%</td></tr>
+<tr><td>8 kbit/s</td><td>about 40% (data: 30 of 30 delivered)</td></tr>
+</tbody></table></div>
+<div class="callout note"><span class="label">Operator rule</span><p>If audio breaks up, the log reports dropped voice frames, or the badge turns yellow or red, switch to data (packet mode) on that link until it improves.</p></div>
 </section>
 
 <!-- ================================================================ -->
@@ -998,7 +1050,7 @@ scripts/tls-list-peers.sh            <span class="c"># on the hub</span></code><
 <tr><td>Starts from</td><td><code>FROM ghcr.io/greggwon/mrefd</code></td><td><code>mrefd/</code> submodule + <code>docker/mrefd/Dockerfile</code></td></tr>
 <tr><td>Needs</td><td>Docker and a Dockerfile only</td><td>Full clone with submodules</td></tr>
 <tr><td>Build time</td><td>Seconds (nothing compiled)</td><td>Minutes; long on a Pi or under emulation</td></tr>
-<tr><td>Use it for</td><td>Site or field-kit images: <code>site.json</code>, default interlink, extra tools, default settings</td><td>A fork, mrefd code changes, TLS branch builds, air-gapped hosts</td></tr>
+<tr><td>Use it for</td><td>Site or field-kit images: <code>site.json</code>, default interlink, extra tools, default settings</td><td>A fork, mrefd code changes, a Ham-DHT build, air-gapped hosts</td></tr>
 </tbody></table></div>
 
 <h3 id="derive">Customizing the published image</h3>
@@ -1009,7 +1061,7 @@ scripts/tls-list-peers.sh            <span class="c"># on the hub</span></code><
 <tr><td>Platforms</td><td><code>linux/amd64</code>, <code>linux/arm64</code>, <code>linux/arm/v7</code>, <code>linux/386</code></td></tr>
 <tr><td>User</td><td><code>mrefd</code> (uid/gid 1000)</td></tr>
 <tr><td>Entrypoint</td><td><code>/usr/bin/tini -- /entrypoint.sh</code></td></tr>
-<tr><td>Binaries</td><td><code>/usr/local/bin/mrefd</code>, <code>/usr/local/bin/m17-advertise</code></td></tr>
+<tr><td>Binaries</td><td><code>/usr/local/bin/mrefd</code>, <code>/usr/local/bin/m17-advertise</code>, <code>/usr/local/bin/tls-*</code> (key scripts)</td></tr>
 <tr><td>Paths</td><td><code>/etc/mrefd</code> (config), <code>/var/lib/mrefd</code> (state), <code>/var/log/mrefd</code> (status JSON)</td></tr>
 <tr><td>Base</td><td><code>debian:12-slim</code></td></tr>
 </tbody></table></div>
@@ -1071,17 +1123,17 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 <h3 id="from-source">Building from source</h3>
 <p>The Dockerfile has three stages:</p>
 <ol>
-  <li><strong>build</strong> (Debian 12): compiles mrefd (without Ham-DHT unless <code>MREFD_BUILD_DHT=true</code>), applies the <code>users.cpp</code> fix, and renders <code>mrefd.mk</code> from build arguments.</li>
+  <li><strong>build</strong> (Debian 12): compiles mrefd with the TLS interlink (always included) and without Ham-DHT unless <code>MREFD_BUILD_DHT=true</code>, applies the <code>users.cpp</code> fix, and renders <code>mrefd.mk</code> from build arguments.</li>
   <li><strong>advertise-build</strong> (golang alpine): builds a static <code>m17-advertise</code> with <code>CGO_ENABLED=0</code>.</li>
-  <li><strong>runtime</strong> (Debian 12 slim): installs runtime libraries and <code>tini</code>, and runs as unprivileged user <code>mrefd</code> (uid 1000).</li>
+  <li><strong>runtime</strong> (Debian 12 slim): installs runtime libraries, <code>tini</code> and the <code>tls-*</code> scripts, and runs as unprivileged user <code>mrefd</code> (uid 1000).</li>
 </ol>
 <div class="table-wrap"><table>
 <thead><tr><th>Command</th><th>Result</th></tr></thead>
 <tbody>
-<tr><td><code>make build-local</code></td><td>Native-architecture reflector and dashboard images, loaded into the local Docker daemon.</td></tr>
+<tr><td><code>make build-local</code></td><td>Native-architecture reflector and dashboard images, loaded into the local Docker daemon. The reflector is tagged for compose and also as <code>ghcr.io/greggwon/mrefd:local</code>.</td></tr>
 <tr><td><code>make build</code></td><td>Multi-arch buildx build for <code>BUILD_PLATFORMS</code>. The result stays in the build cache unless pushed.</td></tr>
-<tr><td><code>make build-test</code></td><td>Multi-arch build pushed to <code>ghcr.io/greggwon/mrefd:test</code>.</td></tr>
-<tr><td><code>make build-release</code></td><td>Multi-arch build (<code>386</code>, <code>amd64</code>, <code>arm64</code>, <code>arm/v7</code>) pushed as <code>:latest</code> plus a versioned tag <code>mrefd-&lt;ver&gt;-b&lt;date&gt;</code>.</td></tr>
+<tr><td><code>make build-test</code></td><td>Maintainer: multi-arch build pushed to <code>ghcr.io/greggwon/mrefd:test</code>.</td></tr>
+<tr><td><code>make build-release</code></td><td>Maintainer: multi-arch build (<code>386</code>, <code>amd64</code>, <code>arm64</code>, <code>arm/v7</code>) pushed as <code>:latest</code> plus a versioned tag <code>mrefd-&lt;ver&gt;-b&lt;date&gt;</code>.</td></tr>
 <tr><td><code>make show-version</code></td><td>Prints the tags a build would produce.</td></tr>
 </tbody></table></div>
 <p>To publish to your own registry:</p>
@@ -1098,14 +1150,17 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 <div class="table-wrap"><table>
 <thead><tr><th>Task</th><th>Source build (repo root)</th><th>Prebuilt (<code>deploy/</code>)</th></tr></thead>
 <tbody>
+<tr><td>First-time setup</td><td><code>make init</code> (or <code>make first</code>: submodules, init, build, start with dashboard)</td><td>copy <code>mrefd.env.example</code> to <code>mrefd.env</code></td></tr>
 <tr><td>Start</td><td><code>make up</code> / <code>make up-dashboard</code></td><td><code>docker compose up -d</code></td></tr>
 <tr><td>Stop</td><td><code>make down</code></td><td><code>docker compose down</code></td></tr>
-<tr><td>Apply <code>.env</code> changes</td><td><code>make restart</code></td><td><code>docker compose up -d</code></td></tr>
-<tr><td>Logs</td><td><code>make logs-mrefd</code></td><td><code>docker compose logs -f</code></td></tr>
+<tr><td>Apply <code>.env</code> changes, or new <code>tls:</code> lines</td><td><code>make restart</code></td><td><code>docker compose up -d</code> / <code>docker compose restart mrefd</code></td></tr>
+<tr><td>Logs</td><td><code>make logs</code> (all), <code>make logs-mrefd</code>, <code>make logs-dashboard</code></td><td><code>docker compose logs -f</code></td></tr>
 <tr><td>Shell in container</td><td><code>make shell</code></td><td><code>docker compose exec mrefd bash</code></td></tr>
-<tr><td>Status</td><td><code>make status</code></td><td><code>docker compose ps</code></td></tr>
+<tr><td>Status</td><td><code>make status</code> (or <code>make ps</code>)</td><td><code>docker compose ps</code></td></tr>
+<tr><td>TLS links</td><td colspan="2"><code>scripts/tls-list-peers.sh</code>, or the dashboard's TLS Links page</td></tr>
 <tr><td>Update</td><td>bump submodule, <code>make build-local</code>, <code>make restart</code></td><td><code>docker compose pull &amp;&amp; docker compose up -d</code></td></tr>
-<tr><td>Wipe state (status, logs)</td><td><code>make clean</code></td><td><code>docker compose down -v</code></td></tr>
+<tr><td>Wipe state (status, logs)</td><td><code>make clean</code>; <code>make prune</code> also removes the local images</td><td><code>docker compose down -v</code></td></tr>
+<tr><td>List all targets</td><td><code>make help</code></td><td></td></tr>
 </tbody></table></div>
 <p>Persistent data lives in two named volumes. <code>mrefd-state</code> holds runtime state, and <code>mrefd-log</code> holds the <code>mrefd.json</code> status file that the dashboard reads. The containers use <code>restart: unless-stopped</code>, so a field node comes back on its own after a power cycle.</p>
 
@@ -1122,9 +1177,9 @@ make build-local &amp;&amp; make restart</code></pre>
 <ul>
   <li>Pi with SD card or SSD, a reliable power supply, and an image already pulled (<code>docker compose pull</code> before you leave home).</li>
   <li>Your own travel router or access point, with client isolation <strong>off</strong>, so mDNS works regardless of the venue.</li>
-  <li><code>config/tls/client.*</code> and <code>home.pem</code> installed, and the interlink line pointing at the hub.</li>
-  <li>A time source: NTP when online, GPS when not.</li>
-  <li>Test once on the home network: the app finds the node over mDNS, and the hub shows the TLS peer.</li>
+  <li><code>config/tls/client.crt</code>/<code>client.key</code> and <code>config/tls/hubs/&lt;hub&gt;.crt</code> installed, and the <code>tls:</code> line written by <code>tls-add-hub.sh</code>.</li>
+  <li>A time source: NTP when online, GPS when not. The hub rejects a node whose clock is more than 300 s off.</li>
+  <li>Test once on the home network: the app finds the node over mDNS, the log shows <code>link UP</code>, and the TLS badge is green.</li>
 </ul>
 </section>
 
@@ -1142,13 +1197,16 @@ make build-local &amp;&amp; make restart</code></pre>
 <tr><td>Nothing discovered on Docker Desktop (Mac/Windows)</td><td>Expected. Set <code>MREFD_ADVERTISE_ENABLED=false</code> and run <code>m17-advertise</code> natively on the host.</td></tr>
 <tr><td>"Connection refused" on UDP from macOS</td><td>Docker Desktop dual-stack UDP bug. Use <code>docker-compose.bridge.yml</code>, which publishes UDP on IPv4 only.</td></tr>
 <tr><td>Peers connect but no audio passes</td><td>The two sides have different encryption settings on a shared module.</td></tr>
-<tr><td>No <code>TLS interlink layer active.</code> in the log</td><td>The image was built without TLS (see <a href="#tls-build">Building with TLS support</a>), or the interlink file has no <code>key:</code>/<code>tls:</code> entry.</td></tr>
-<tr><td>Hub rejects BIRTH: timestamp</td><td>The field node's clock is off by more than <code>MREFD_TLS_TIMESTAMP_SKEW</code>. Fix NTP/GPS time.</td></tr>
-<tr><td>Hub log: <code>unregistered key</code> (node sees reject 0x1)</td><td>The node's certificate isn't registered at the hub, or the registered <code>.pub.pem</code> is outdated after a key rotation. Re-run <code>tls-add-peer.sh --force</code> with the current certificate.</td></tr>
-<tr><td>Hub log: <code>belongs to 'X', but the interlink line says 'Y'</code></td><td>The callsign on a <code>key:</code> line must be the certificate's CN. Fix the line; mrefd skips it until then.</td></tr>
-<tr><td>Hub log: <code>asserted module(s) …</code> (node sees reject 0x4)</td><td>The node's interlink line names a module that isn't in the operator's allowed list on the hub. Change the node's module, or add the letter to the hub's line.</td></tr>
-<tr><td>Node log: <code>must assert exactly one module</code></td><td>A field node's <code>tls:</code> line has more than one module letter. Each node links exactly one module.</td></tr>
-<tr><td>Field can't complete TLS handshake</td><td>Check that TCP 17000 is open on the hub and that <code>home.pem</code> matches the hub's current cert. Run <code>tls-verify.sh</code>.</td></tr>
+<tr><td>Field log: <code>hub rejected us: our key isn't registered there</code><br>Hub log: <code>TLS server: unregistered key (CN '…', fingerprint …)</code></td><td>The hub has no registration for this operator's key, or has an old copy after the operator made a new key. On the hub: <code>scripts/tls-add-peer.sh --cert W5ABC.crt --modules B,C</code> (add <code>--force</code> to replace an old key).</td></tr>
+<tr><td>Field log: <code>hub rejected us: module B isn't allowed for our key at the hub</code><br>Hub log: <code>'W5ABC-B' asserted module(s) 'B'; key 'W5ABC' may assert one of 'C'</code></td><td>The node links a module the hub hasn't allowed for this key. Rerun <code>tls-add-peer.sh</code> on the hub with the module added, or change the node's module with <code>tls-add-hub.sh</code> and restart it.</td></tr>
+<tr><td>Field log: <code>hub rejected us: our clock and the hub's differ too much (check NTP on both ends)</code><br>Hub log: <code>BIRTH verify failed</code></td><td>The clocks differ by more than <code>MREFD_TLS_TIMESTAMP_SKEW</code> (300 s). Fix NTP (or GPS time) on both ends.</td></tr>
+<tr><td>Container exits: <code>MREFD_TLS_CLIENT_KEY=… isn't readable by mrefd (uid 1000). On the host: sudo chown 1000 config/tls/*.key</code></td><td>The key was made by a different user and is mode 0600. Run the printed command on the host, then start again.</td></tr>
+<tr><td>Log: <code>can't keep up with voice: dropped N stale voice frame(s) in the last 10s</code>, or <code>is falling behind</code>; badge yellow or red</td><td>The link is slower than voice needs (about 31 kbit/s each way). Use data (packet mode) on that link until it improves. See <a href="#tls-slow">Slow links</a>.</td></tr>
+<tr><td>Field log: <code>TLS handshake failed: the hub's certificate doesn't match our servercert: pin</code></td><td>The hub key was rotated, or the wrong certificate was pinned. Get the current <code>server.crt</code> from the hub operator, rerun <code>tls-add-hub.sh</code>, restart. <code>tls-verify.sh --host … --expect-fingerprint …</code> confirms which hub answers.</td></tr>
+<tr><td>Field log: connection refused, <code>is the hub's TLS listener running?</code></td><td>Open TCP 17000 inbound on the hub. The hub starts listening only once at least one operator key is registered.</td></tr>
+<tr><td>Hub log: <code>registers operator keys, but MREFD_TLS_SERVER_CERT / MREFD_TLS_SERVER_KEY aren't set</code></td><td>There is no <code>config/tls/server.crt</code>/<code>server.key</code>. Run <code>tls-genkey.sh --role hub --identity M17-HUB</code> and restart.</td></tr>
+<tr><td>Hub log: <code>belongs to 'X', but the interlink line says 'Y'; skipping</code></td><td>A hand-edited <code>key:</code> line names a different callsign than its certificate. Remove the line and register with <code>tls-add-peer.sh</code>.</td></tr>
+<tr><td>Node log: <code>must assert exactly one module</code></td><td>A field node's <code>tls:</code> line has more than one module letter. Each node links exactly one module per hub.</td></tr>
 <tr><td><code>linux/arm/v7</code> build fails with <code>shift-count-overflow</code></td><td>The submodule predates the <code>users.cpp</code> fix and the Dockerfile <code>sed</code> didn't match. Move the submodule to a newer commit.</td></tr>
 </tbody></table></div>
 </section>
@@ -1158,12 +1216,12 @@ make build-local &amp;&amp; make restart</code></pre>
 <h2><span class="num">14</span>Appendix</h2>
 <h3>Related documents in this repository</h3>
 <ul>
-  <li><a href="../README.md">README.md</a>: project overview and developer notes</li>
-  <li><a href="../deploy/README.md">deploy/README.md</a>: the shortest path to a running reflector</li>
-  <li><a href="../deploy/BUILD.md">deploy/BUILD.md</a>: customizing the published image, or building and publishing your own from source</li>
-  <li><a href="../deploy/CERTS.md">deploy/CERTS.md</a>: TLS certificate lifecycle</li>
-  <li><a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>: choosing UDP or TLS for a peering</li>
-  <li><a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>: TLS relay protocol design</li>
+  <li><a href="../README.md">README.md</a>: the short start. What the project is and the quickest way to run it.</li>
+  <li><a href="../deploy/README.md">deploy/README.md</a>: the shortest path to a running reflector from the prebuilt image.</li>
+  <li><a href="../deploy/BUILD.md">deploy/BUILD.md</a>: customizing the published image, or building and publishing your own from source.</li>
+  <li><a href="../deploy/CERTS.md">deploy/CERTS.md</a>: the TLS key and certificate reference: what each file is, the scripts, and doing it by hand with <code>openssl</code>.</li>
+  <li><a href="../deploy/INTERLINK-CHOICES.md">deploy/INTERLINK-CHOICES.md</a>: UDP or TLS, and when to use each for a peering.</li>
+  <li><a href="tls-interlink-design.md">docs/tls-interlink-design.md</a>: the TLS interlink protocol design, as built.</li>
 </ul>
 <h3>Standards</h3>
 <ul>

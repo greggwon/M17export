@@ -28,8 +28,8 @@ cp mrefd.env.example mrefd.env
 $EDITOR mrefd.env
 ```
 
-Fill in at minimum: `MREFD_CALLSIGN`, `MREFD_MODULES`, `MREFD_COUNTRY`,
-`MREFD_EMAIL`, `MREFD_DASHBOARD_URL`. Everything else is optional.
+Fill in `MREFD_CALLSIGN` and `MREFD_MODULES` (e.g. `B,C,D`). Everything
+else is optional.
 
 Note: the callsign must be exactly `M17-XYZ` (three A–Z/0–9 chars after
 `M17-`) and must not be already listed at <https://dvref.com>. If you're
@@ -58,7 +58,7 @@ To stop: `docker compose down`. To update to a newer image later:
 | Purpose                   | Proto | Default port |
 |---------------------------|-------|--------------|
 | M17 protocol              | UDP   | 17000        |
-| TLS interlink (optional)  | TCP   | 17000        |
+| TLS links from field nodes (hubs only) | TCP | 17000 |
 | mDNS advertisement (LAN)  | UDP   | 5353         |
 
 ## When something breaks
@@ -80,20 +80,44 @@ To stop: `docker compose down`. To update to a newer image later:
   is actually open on your firewall / security group / router. For AWS
   EC2: the VPC's Security Group needs an inbound UDP 17000 rule.
 
-## Optional: TLS interlink
+## Optional: link field nodes to a hub over TLS
 
-The community default for reflector interlinks is IP-based UDP peering,
-and that keeps working exactly as it always has. TLS is an *additional*
-option for cases where it solves a specific problem — a peer with a
-variable public IP, a private mesh you don't want on dvref, etc.
+A field node (a go-kit, vehicle or event site) holds an authenticated TLS
+link to a hub at a fixed address, so its own address doesn't matter. The
+key scripts are inside the image, so this directory is all you need. Run
+them from this `deploy/` directory:
 
-- Undecided whether TLS is worth it for a given peering?
-  → [`INTERLINK-CHOICES.md`](INTERLINK-CHOICES.md) walks through when
-    each model fits and gives talking points for the two-way sign-off.
-- Ready to set TLS up? → [`CERTS.md`](CERTS.md) covers cert creation,
-  distribution, verification, and rotation.
-- Full protocol design (wire format, handshake, threat model):
-  `../docs/tls-interlink-design.md` in the source repo.
+```bash
+# shorthand for this session
+tls() { docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/mrefd" -v "$PWD:/work" -w /work \
+        --entrypoint "tls-$1" ghcr.io/greggwon/mrefd:latest "${@:2}"; }
+```
+
+**Hub, once:** `tls genkey --role hub --identity M17-HUB`. Give
+`config/tls/server.crt` to field operators, and open TCP 17000 inbound.
+
+**Each field operator, once:** `tls genkey --identity W5ABC`. Send
+`config/tls/client.crt` (never the `.key`) to the hub operator. Copy
+`config/tls/` to each of your nodes.
+
+**Hub, per operator (live, no restart):**
+`tls add-peer --cert W5ABC.crt --modules B,C`
+
+**Each field node:**
+`tls add-hub --hub M17-HUB --host hub.example.org --module B --cert M17-HUB.crt`,
+then `docker compose restart mrefd`.
+
+**Check:** `docker compose logs mrefd | grep link`, the dashboard's
+**TLS Links** page, or `tls list-peers`. Revoke with
+`tls remove-peer --identity W5ABC`.
+
+- What each step does, rotation, and doing it by hand:
+  [`CERTS.md`](CERTS.md).
+- Whether a given link should be TLS or plain UDP peering:
+  [`INTERLINK-CHOICES.md`](INTERLINK-CHOICES.md).
+- Slow links: voice needs about 31 kbit/s over TLS. If audio breaks up,
+  use data (packet mode); see "Slow links" in the top-level
+  [README](../README.md).
 
 ## Building your own image
 

@@ -1,9 +1,23 @@
 # TLS-Authenticated Dynamic Interlink for MREFD
 
-**Status:** design draft
+**Status:** implemented
 **Author:** Gregg Wonderly (W5GGW)
-**Target implementation:** greggwon/mrefd fork, then PR to n7tae/mrefd
+**Implementation:** greggwon/mrefd fork, branch `tls-interlink` (the `mrefd/` submodule here); PR to n7tae/mrefd later
 **Target spec:** M17 Foundation interlink protocol (future)
+
+This document is the protocol design as built: the wire format, the trust
+model, and how the mrefd side behaves. It is not an operator guide. How to
+set up a hub or a field node lives in [`README.md`](../README.md) (TLS
+interlink, ports, configuration) and [`deploy/CERTS.md`](../deploy/CERTS.md)
+(keys, certificates, revocation, rotation). Choosing between UDP and TLS
+interlinks is covered in
+[`deploy/INTERLINK-CHOICES.md`](../deploy/INTERLINK-CHOICES.md).
+
+The implementation has been tested end to end in containers: voice and data
+both ways, roaming (a node reconnecting from a new address; the newest
+connection wins), silent-drop detection via TCP keepalive, clean shutdown,
+rejection of unregistered keys, live key add / module change / revoke, and
+simulated slow WAN links.
 
 ---
 
@@ -20,17 +34,18 @@ breaks for two important deployment shapes:
    field kits to connect back to a well-known public reflector without
    publishing those kits on Ham-DHT / `dvref.com`.
 
-Verified in source (`interlink.cpp:45`): the interlink parser rejects any
-non-literal address with `"is not a valid internet address!"`. Hostnames are
-not accepted. Ham-DHT is the only currently-supported mechanism for dynamic
-IP discovery, and it publishes reflector addresses to the wider public
-network, which is not always desired.
+The UDP interlink parser (`interlink.cpp`) rejects any non-literal address
+with `"is not a valid internet address!"`; hostnames are not accepted.
+Ham-DHT is upstream's mechanism for dynamic IP discovery, and it publishes
+reflector addresses to the wider public network, which is not always
+desired. Field nodes in this project run without DHT; whether hubs publish
+on Ham-DHT is not settled, and both builds are supported.
 
 **Goal:** allow a field mrefd instance to authenticate itself to a home
-mrefd instance using a public/private keypair, causing the home to install
-a peer entry using the source address of the incoming TLS session — without
-either side pre-declaring an IP, and without publishing the field reflector
-to Ham-DHT.
+(hub) mrefd instance using a public/private keypair, causing the hub to
+install a peer entry using the source address of the incoming TLS session —
+without either side pre-declaring the field node's IP, and without
+publishing the field reflector to Ham-DHT.
 
 ---
 
@@ -40,12 +55,14 @@ Ordered roughly from most to least foundational.
 
 ### 2.1 Transport
 
-- **TCP on port 17000** with TLS. Same port number as the existing UDP
-  interlink; different transport protocol. Both listeners coexist.
-- **Per-peer choice**, not global mode. Presence of a `key:<file>` clause on
-  a `mrefd.interlink` entry marks that peer as TLS/TCP. Absence keeps it as
-  legacy UDP. Mixed peer sets on a single reflector are supported.
-- **No auth fallback.** A peer either supports the TLS-auth mode or it is
+- **TCP with TLS (1.2 minimum), on the M17 port (default 17000).** Same port
+  number as the UDP M17 protocol; different transport. Both listeners
+  coexist. `MREFD_TLS_PORT` can move the TLS listener.
+- **Per-peer choice**, not a global mode. A `key:` clause (hub side) or a
+  `tls:` clause (field side) on a `mrefd.interlink` line marks that peer as
+  TLS/TCP. Lines without them stay legacy UDP. Mixed peer sets on one
+  reflector are supported.
+- **No auth fallback.** A peer either speaks the TLS-auth mode or it is
   incompatible; the mismatch is a config error, not a graceful degradation.
 
 ### 2.2 Identity and cryptographic model
@@ -53,79 +70,77 @@ Ordered roughly from most to least foundational.
 - **The key decides who a peer is.** Each operator holds **one**
   certificate whose Subject CN is their bare callsign (`W5GGW`). Every node
   that operator runs presents that same certificate. The hub looks up the
-  presented key by its SPKI fingerprint; nothing the peer *says* can change
-  which callsign it is.
+  presented key by its SPKI SHA-256 fingerprint; nothing the peer *says* can
+  change which callsign it is.
 - **The node chooses its module.** On each connection the node asserts the
   single module it is linking, the same way a radio picks a module when it
   connects to a reflector. The hub names the node `<CN>-<module>`
   (`W5GGW-B`, `W5GGW-C`, ...), so one operator runs several field boxes at
   once, one per module, with one certificate. The hub's registration lists
   which modules that key may assert.
-- **Field credential:** self-signed X.509 certificate with an **Ed25519**
-  keypair. Small, universally supported by modern TLS libraries, no CA
-  infrastructure required.
-- **Trust model:** the field trusts the server's cert (obtained
-  out-of-band, pinned). The server requires a client certificate in the
-  TLS handshake and accepts it only if its SPKI fingerprint matches a
-  registered keyfile; BIRTH must then name that key's callsign plus one
-  permitted module, signed by the same key.
-- **Server cert distribution:** out-of-band — a published cert on the
-  server operator's website, on DVREF, or handed over directly. No TOFU;
-  no automatic trust bootstrap.
+- **Credentials:** self-signed X.509 certificates with **Ed25519** keys, for
+  both the hub and operators. No CA.
+- **Trust model:** the field node pins the hub's certificate file as its
+  only trust anchor (no hostname check; the CN is the hub's callsign, not its
+  DNS name). The hub requires a client certificate in the handshake but does
+  not validate a chain; it accepts the connection only if the certificate's
+  SPKI fingerprint matches a registered certificate. BIRTH must then name
+  that key's callsign plus one permitted module, signed by the same key.
+- **Certificate distribution:** out-of-band, with the fingerprint checked by
+  phone or email. No TOFU; no automatic trust bootstrap.
 
 ### 2.3 Enrollment / key registry
 
-- **No web UI.** Enrollment is a config-file operation, once per
-  operator (not per node):
-  1. Operator generates one keypair and cert, CN = their callsign.
-  2. Operator sends the public cert to the home operator (email, PR to a
-     config repo, etc.) and copies cert + key to each of their nodes.
-  3. Home operator drops the cert file on the server and adds a
-     `CALLSIGN MODULES key:<path>` line to `mrefd.interlink`, where
-     MODULES are the modules that operator's nodes may assert.
-  4. Each node's own `mrefd.interlink` names the hub and the one module
-     that node asserts.
-- `mrefd` hot-reloads `mrefd.interlink` today; the extension retains that
-  behavior for the new field.
-- Same behavior for revocation: remove line + delete keyfile, which
-  revokes every node using that key. To retire one node but keep the
-  others, drop its module from the registration's MODULES.
+- **No web UI.** Enrollment is a config-file operation, once per operator
+  (not per node). The hub keeps the operator's certificate under
+  `tls/peers/` and a `CALLSIGN MODULES key:<path>` line in
+  `mrefd.interlink`; each node's own `mrefd.interlink` names the hub and the
+  one module that node asserts. The `scripts/tls-*.sh` tools write both
+  (§7).
+- **Hub side hot-reloads** `mrefd.interlink` within seconds, no restart:
+  adding the first key starts the TLS listener; changing a key's modules
+  disconnects nodes on removed modules; removing a key disconnects all its
+  nodes immediately and refuses them from then on.
+- **Field side** `tls:` lines take effect when the node restarts.
 
 ### 2.4 Connection lifecycle
 
-- **Every reconnect is a fresh birth event.** No persistent session state
-  across TCP disconnects.
-- **PING/PONG keepalive** keeps the peer entry alive. Missed keepalive drops
-  the peer entry; the field's next reconnect will re-birth.
-- **Retry with backoff** on the field side when the home is unreachable.
-- **Bad networks are bad networks.** No heroic recovery logic. TCP semantics
-  are accepted as-is: what is written is delivered whole or truncated at
-  EOF; truncated trailing frames are discarded.
-- **Live-session cutoff on revocation** is out of band via `iptables` block
-  on the source IP. A CLI tool automates this (see §7).
+- **Every reconnect is a fresh birth event.** No session state survives a
+  TCP disconnect.
+- **Newest connection wins.** If a node (`W5GGW-B`) connects while an older
+  session for the same name is still open — typically a roaming node whose
+  old path hasn't timed out — the older session is aborted.
+- **Liveness is TCP keepalive**, not application PINGs: probe after 60 s
+  idle, every 30 s, give up after 8 unanswered probes (about 5 minutes).
+  Tunable with `MREFD_TLS_KEEPALIVE`; `MREFD_TLS_USER_TIMEOUT` optionally
+  bounds how long unacknowledged data may sit (default off).
+- **No connect timeout.** The kernel's SYN retries run their full course so
+  slow or lossy links still connect.
+- **Retry with backoff** on the field side: 2 s, doubling to a 60 s cap,
+  reset after a successful link.
+- **Clean shutdown:** on stop, each live session gets a DISCONNECT frame and
+  up to about 2 s to flush.
+- **Bad networks are bad networks.** TCP semantics are accepted as-is; a
+  truncated trailing frame at EOF is discarded.
 
 ### 2.5 Threat model
 
 - Public network with hostile actors.
-- One-way authentication is sufficient: no need to defend the field against
-  a hostile server pretending to be the home reflector at the level of a
-  full mutual auth. Distributing the server cert out-of-band gives adequate
-  server authentication.
-- **DDoS is out of scope.** Public server admin is responsible via firewall
-  / rate limiting / fail2ban.
-- **Auth-attempt exploits** are also out of scope in the protocol; a
-  fail2ban-style script watching auth failures and adding iptables blocks
-  is the deployment answer.
-- **DNS or routing attacks** on the server's advertised address are
-  accepted risks; server cert pinning defeats DNS-level MITM.
+- Server authentication is by the pinned hub certificate; client
+  authentication is by the registered key plus the signed BIRTH.
+- **DDoS is out of scope.** The hub's operator handles it with firewall /
+  rate limiting.
+- **Auth-attempt abuse** is out of scope in the protocol. The hub logs each
+  refusal with the source address ("unregistered key ... from <addr>"), which
+  a fail2ban-style watcher can act on.
+- **DNS or routing attacks** on the hub's address are accepted risks;
+  certificate pinning defeats DNS-level MITM.
 
 ### 2.6 Scope
 
-- **MREFD first.** URFD may adopt the same mechanism later if the maintainer
-  is interested; not a blocker for landing the MREFD implementation.
+- **MREFD first.** URFD may adopt the same mechanism later.
 - **Reflector-to-reflector only.** Client (hot-spot / radio) connections to
-  the reflector are unchanged and continue to use existing M17 client
-  protocols on UDP.
+  the reflector are unchanged and use the existing M17 protocol on UDP.
 
 ---
 
@@ -134,13 +149,13 @@ Ordered roughly from most to least foundational.
 ### 3.1 Frame header
 
 Every message on the TLS session is framed with a 32-bit big-endian header
-followed by the payload:
+followed by the payload (`framing.h`):
 
 ```
 0                   1                   2                   3
 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|    version    |  reserved   |             length              |
+|    version    |reserved|              length (20 bits)        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                                                               |
 ~                    payload  (length bytes)                    ~
@@ -148,466 +163,371 @@ followed by the payload:
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- **version (8 bits):** protocol version. `0x01` in this draft.
-- **reserved (4 bits):** MUST be zero on transmit; ignored on receive.
-- **length (20 bits):** payload length in bytes. Max frame ≈ 1 MB — well
-  above any M17 packet-mode payload (largest existing M17 protocol packet is
-  ~800 bytes; length field has room for expansion).
+- **version (8 bits):** `0x01`.
+- **reserved (4 bits, high nibble of byte 1):** zero on transmit. A
+  receiver that sees non-zero reserved bits treats the frame as malformed
+  and ends the session.
+- **length (20 bits):** payload length in bytes, max 1,048,575.
 
-Rejecting a frame with a non-matching version terminates the TLS session.
+A frame with a different version ends the session ("mismatched mrefd
+versions?" in the log). No REJECT is sent for this; it is a framing error.
 
 ### 3.2 Message types
 
-The first byte of `payload` is a message type identifier. Following bytes
-are message-type specific.
+The first byte of `payload` is the message type.
 
 | Type | Name        | Direction   | Description                                    |
 |------|-------------|-------------|------------------------------------------------|
-| 0x01 | BIRTH       | field→home  | Authenticated hello with signed identity       |
-| 0x02 | ACCEPT      | home→field  | Birth accepted, peer entry installed           |
-| 0x03 | REJECT      | home→field  | Birth rejected (bad sig, unknown callsign, …)  |
-| 0x10 | PING        | either      | Keepalive request                              |
-| 0x11 | PONG        | either      | Keepalive response                             |
-| 0x20 | M17_STREAM  | either      | Wrapped M17 Stream Mode packet                 |
-| 0x21 | M17_PACKET  | either      | Wrapped M17 Packet Mode packet                 |
+| 0x01 | BIRTH       | field→hub   | Signed hello naming the node and its module    |
+| 0x02 | ACCEPT      | hub→field   | Birth accepted, peer entry installed           |
+| 0x03 | REJECT      | hub→field   | Birth rejected, with a reason code             |
+| 0x10 | PING        | either      | Answered with PONG; mrefd itself doesn't send it |
+| 0x11 | PONG        | either      | Echo of a PING payload                         |
+| 0x20 | M17_STREAM  | either      | Wrapped M17 stream-mode packet (voice)         |
+| 0x21 | M17_PACKET  | either      | Wrapped M17 packet-mode packet (data)          |
 | 0x7F | DISCONNECT  | either      | Graceful shutdown notice                       |
+
+Unknown types are logged and ignored.
 
 ### 3.3 BIRTH payload
 
+`birth.h`:
+
 ```
-+----------------+------------------------------------------------+
-| msg_type=0x01  | (1 byte)                                       |
-+----------------+------------------------------------------------+
-| id_len         | length of identity string in bytes (1 byte)    |
-+----------------+------------------------------------------------+
-| identity       | ASCII "<cert CN>-<module>", e.g. "W5GGW-B"     |
-+----------------+------------------------------------------------+
-| timestamp_ms   | 64-bit big-endian Unix time in milliseconds    |
-+----------------+------------------------------------------------+
-| nonce          | 32 bytes of cryptographically random data      |
-+----------------+------------------------------------------------+
-| sig_len        | length of signature (1 byte, Ed25519 = 64)     |
-+----------------+------------------------------------------------+
-| signature      | Ed25519 signature over identity||timestamp||nonce|
-+----------------+------------------------------------------------+
-| modules        | ASCII string listing requested shared modules  |
-+----------------+------------------------------------------------+
++-------------+---------------------------------------------------+
+| msg_type    | 0x01                                     (1 byte) |
++-------------+---------------------------------------------------+
+| id_len      | identity length in bytes (max 32)        (1 byte) |
++-------------+---------------------------------------------------+
+| identity    | ASCII "<cert CN>-<module>", e.g. "W5GGW-B"        |
++-------------+---------------------------------------------------+
+| ts_ms       | Unix time in milliseconds         (8 bytes, BE)   |
++-------------+---------------------------------------------------+
+| nonce       | 32 bytes of random data                           |
++-------------+---------------------------------------------------+
+| sig_len     | signature length, 64 for Ed25519         (1 byte) |
++-------------+---------------------------------------------------+
+| signature   | Ed25519 over identity || ts_ms || nonce           |
++-------------+---------------------------------------------------+
+| mod_len     | modules string length (max 26)           (1 byte) |
++-------------+---------------------------------------------------+
+| modules     | ASCII; the one module asserted, e.g. "B"          |
++-------------+---------------------------------------------------+
 ```
 
-Signature covers `identity || timestamp_ms || nonce` (concatenated bytes,
-big-endian for the timestamp). The nonce ensures every signature is unique
-regardless of clock resolution; the timestamp gives freshness that the home
-can check against a configurable skew window (default ±5 minutes) to defeat
-long-window replay.
+The signature covers `identity || ts_ms || nonce`. `modules` is not signed
+separately, but the hub requires it to equal the module in the (signed)
+identity. The nonce makes every signature unique; the timestamp must be
+within `MREFD_TLS_TIMESTAMP_SKEW` (default 300 s) of the hub's clock, so
+both ends need NTP.
+
+The hub checks, in order (`tlsserver.cpp`):
+
+1. TLS handshake with a client certificate (required).
+2. Read and parse BIRTH (read before judging, so a REJECT is delivered
+   instead of a reset).
+3. Look up the certificate's SPKI fingerprint in the registry.
+4. Identity must be `<registered callsign>-<one letter A-Z>`.
+5. Signature and timestamp, against the registered certificate.
+6. `modules` must be exactly that letter, and the letter must be in the
+   registration's module list.
+
+Then it sends ACCEPT.
 
 ### 3.4 ACCEPT / REJECT
 
-`ACCEPT` payload is `msg_type` only. `REJECT` payload adds a 1-byte reason
-code and a variable-length ASCII diagnostic:
+`ACCEPT` is `msg_type` only. `REJECT` is `msg_type` plus a 1-byte reason
+code; there is no diagnostic string. The field node turns the code into a
+log line and the dashboard's LastError.
 
-| Code | Meaning                                    |
-|------|--------------------------------------------|
-| 0x01 | Unknown identity                            |
-| 0x02 | Signature verification failed              |
-| 0x03 | Timestamp outside skew window (stale/future)|
-| 0x04 | Requested modules not permitted for this identity |
-| 0x05 | Version not supported                      |
-| 0xFF | Other (see diagnostic string)              |
+| Code | Hub sends it when                                              |
+|------|----------------------------------------------------------------|
+| 0x01 | Key not registered, no usable client cert, or identity doesn't match the key's callsign |
+| 0x02 | Signature didn't verify                                        |
+| 0x03 | Timestamp outside the skew window (check NTP)                  |
+| 0x04 | Module not allowed for this key (or more than one asserted)    |
+| 0x05 | Reserved for version mismatch; not sent (version is checked at the framing layer) |
+| 0xFF | BIRTH didn't parse, or other verify failure                    |
 
 ### 3.5 PING / PONG
 
-Both carry a 32-bit big-endian sequence number in the payload. Sender picks
-sequence values; receiver echoes in `PONG`. Default cadence: `PING` every
-10 seconds, disconnect after two missed `PONG`s.
+A PONG echoes the PING payload with the type byte changed. mrefd answers
+PINGs but does not send them; dead links are found by TCP keepalive
+(§2.4).
 
 ### 3.6 M17_STREAM / M17_PACKET
 
-Payload is the raw existing mrefd interlink packet body (unchanged from the
-current UDP interlink protocol). This preserves all existing M17 semantics —
-callsigns, module addressing, encryption flags — and lets most of the
-existing packet-handling code paths in mrefd be reused unmodified.
+The payload after the type byte is the M17 packet exactly as it would be
+sent over UDP (`"M17 "` stream frames, `"M17P"` packet-mode frames, at most
+`MAX_PACKET_SIZE` = 860 bytes). The sender picks 0x20 or 0x21 from that
+magic. The receiver feeds the packet into the same dispatch as a UDP
+receive, with the TLS peer's address as the source.
+
+### 3.7 DISCONNECT
+
+`msg_type` only. Sent to every live session when mrefd stops. The receiver
+ends the session and logs "peer sent DISCONNECT".
 
 ---
 
-## 4. Configuration file changes
+## 4. Configuration
 
-### 4.1 Extended `mrefd.interlink` syntax
+### 4.1 `mrefd.interlink` syntax
 
-New optional field: `key:<filepath>` in any position among the whitespace-
-separated tokens. Its presence marks the peer as TLS/TCP.
+A line containing a `key:`, `tls:` or `servercert:` token is a TLS line.
+Modules may be written `B,C`, `BC` or `"b c"`; the scripts write `B,C`.
 
 Legacy forms (unchanged):
 
 ```
-# DHT-based (both sides on Ham-DHT):
-M17-QQQ ABC
-
 # Legacy IP+port:
-M17-URF 45.32.11.22 17000 BCD
+M17-URF 45.32.11.22 17000 B,C,D
 
 # Legacy pre-1.0 peer:
 M17-QQQL 44.45.45.100 ABC
+
+# DHT form (DHT builds only):
+M17-QQQ ABC
 ```
 
-New TLS forms:
+TLS forms, as the scripts write them:
 
 ```
-# Home-side: register operator W5GGW's key. Any node presenting it may
-# connect asserting B, C or D, and appears as W5GGW-B / W5GGW-C / W5GGW-D.
-# The callsign must equal the cert's CN; no IP or port needed.
-W5GGW BCD key:/etc/mrefd/tls/peers/W5GGW.pub.pem
+# Hub: register operator W5ABC's key. Nodes holding it may assert B or C
+# and appear as W5ABC-B / W5ABC-C. The callsign must equal the cert's CN,
+# or the line is skipped with a log message.
+W5ABC      B,C      key:/etc/mrefd/tls/peers/W5ABC.pub.pem
 
-# Field-side: dial the hub and assert ONE module (here B). The hub's
-# server cert is pinned by pointing at a local copy.
-M17-HOM B tls:home.example.org:17000 servercert:/etc/mrefd/tls/home.pem
+# Field node: dial the hub and assert ONE module. The hub's certificate is
+# pinned by pointing at a local copy.
+M17-HUB    B   tls:hub.example.org:17000  servercert:/etc/mrefd/tls/hubs/M17-HUB.crt
 ```
 
-The field's own cert and private key are declared once at the reflector
-level (see §4.2), not per-peer: the node's callsign comes from that cert,
-and each `tls:` line adds the module asserted on that link.
+Rules enforced by the parser (`interlinks.cpp`):
 
-### 4.2 `mrefd.cfg` additions
+- A line may not mix `key:` and `tls:`.
+- A `tls:` line must assert exactly one module, and needs `servercert:`.
+- `tls:` takes `host:port` or `host` (port 17000). IPv6 literals are not
+  supported; use a DNS name.
+- A `key:` line's name must be a bare callsign (no `-module`).
 
-```
-# ---- TLS interlink ---------------------------------------------------------
-# Enable the TLS/TCP listener on Port. Required for any home-side TLS peer.
-TLSEnabled = true
+The field node's own certificate and key are not on the line; they are the
+reflector-wide client credentials (§4.2). The node's name at the hub is
+that certificate's CN plus the line's module.
 
-# Server certificate and key (this reflector's identity when accepting
-# incoming TLS peers). Required when TLSEnabled = true.
-TLSServerCert = /etc/mrefd/tls/server.crt
-TLSServerKey  = /etc/mrefd/tls/server.key
+### 4.2 Environment variables
 
-# Client certificate and key (this reflector's identity when initiating
-# outbound TLS peers). Required if any interlink entry uses `tls:` form.
-TLSClientCert = /etc/mrefd/tls/client.crt
-TLSClientKey  = /etc/mrefd/tls/client.key
+`mrefd.cfg` has no TLS settings. TLS is configured by the `mrefd.interlink`
+lines above plus these optional environment variables:
 
-# Allowed clock-skew window for BIRTH timestamps, in seconds. Default 300.
-TLSTimestampSkew = 300
-```
+| Variable                    | Default                                     |
+|-----------------------------|---------------------------------------------|
+| `MREFD_TLS_SERVER_CERT`     | `/etc/mrefd/tls/server.crt` if present (hub)  |
+| `MREFD_TLS_SERVER_KEY`      | `/etc/mrefd/tls/server.key` if present      |
+| `MREFD_TLS_CLIENT_CERT`     | `/etc/mrefd/tls/client.crt` if present (field) |
+| `MREFD_TLS_CLIENT_KEY`      | `/etc/mrefd/tls/client.key` if present      |
+| `MREFD_TLS_PORT`            | `MREFD_PORT` (17000)                        |
+| `MREFD_TLS_BIND_ADDR`       | `MREFD_IPV6_BIND`, else `0.0.0.0`           |
+| `MREFD_TLS_TIMESTAMP_SKEW`  | 300 (seconds)                               |
+| `MREFD_TLS_MAX_AUDIO_MS`    | 200 (voice older than this is dropped)      |
+| `MREFD_TLS_DATA_QUEUE_KB`   | 1024 (cap on queued packet-mode data)       |
+| `MREFD_TLS_KEEPALIVE`       | `60,30,8` (idle s, interval s, probes), or `off` |
+| `MREFD_TLS_USER_TIMEOUT`    | 0 (off)                                     |
 
-### 4.3 `mrefd.mk` additions
+The cert/key defaults come from the container entrypoint, which uses the
+files in `config/tls/` when the variables are unset. If a key exists but
+the container user (uid 1000) can't read it, the container stops and prints
+the `chown` command to run.
 
-```
-# Compile in TLS interlink support. Requires libssl-dev (or equivalent).
-TLS = true
-```
+### 4.3 Build
+
+TLS is always compiled in. There is no `TLS=true` build flag; the mrefd
+Makefile always links `-lssl -lcrypto`. Ham-DHT remains a separate build
+choice (`MREFD_BUILD_DHT`, default false).
 
 ---
 
-## 5. `mrefd` source changes
-
-Grouped by file. Rough scope; detailed diffs to follow in the implementation
-PR.
+## 5. `mrefd` source changes (as built)
 
 ### 5.1 New files
 
-- **`tlssession.h/.cpp`** — Wraps a single TLS session (`SSL*` handle plus
-  socket, buffered read state, framing state machine). Owned either by
-  `CTLSServer` (accepted session) or `CTLSClient` (outbound session).
-- **`tlsserver.h/.cpp`** — TCP listener + `SSL_accept` loop. Maintains a
-  map of active `TLSSession` instances keyed by identity.
-- **`tlsclient.h/.cpp`** — Outbound TCP + `SSL_connect` for `tls:` peers.
-  Handles reconnect/backoff.
-- **`framing.h/.cpp`** — Frame header parse/serialize; message-type dispatch
-  table.
-- **`birth.h/.cpp`** — BIRTH message construction (client) and verification
-  (server). Ed25519 signature via libssl / libsodium.
-- **`certstore.h/.cpp`** — Loads and caches the peer keyfiles referenced
-  from `mrefd.interlink` entries. Watches for file change / removal so a
-  keyfile deletion triggers a live-session tear-down.
+- **`framing.h/.cpp`** — frame header serialize/parse, message types.
+- **`birth.h/.cpp`** — BIRTH build/parse/verify (Ed25519 via OpenSSL),
+  nonce generation, certificate CN and SPKI fingerprint helpers, identity
+  parsing.
+- **`tlssession.h/.cpp`** — one TLS session: blocking framed I/O for the
+  handshake and BIRTH, then the non-blocking I/O loop (§6).
+- **`tlsserver.h/.cpp`** — TCP listener, `SSL_accept`, BIRTH checks
+  (§3.3), one thread per accepted connection.
+- **`tlsclient.h/.cpp`** — outbound TCP connect (every `getaddrinfo`
+  address in turn, no timeout of its own), `SSL_connect` with the pinned hub
+  cert, BIRTH, ACCEPT/REJECT.
+- **`tlsinterlinks.h/.cpp`** — orchestration: builds the key registry from
+  `mrefd.interlink`, starts the server and one retry thread per `tls:`
+  target, hot reload and revocation, routes M17 traffic to and from
+  sessions, link status for `mrefd.json`.
+- **`tests/tls-selftest.cpp`** — self-test: framing, BIRTH sign/verify/skew, and a loopback handshake.
 
 ### 5.2 Modified files
 
-- **`interlinks.cpp/.h`** — Extend `LoadFromFile` to parse `key:`, `tls:`,
-  and `servercert:` tokens. Add new `Emplace` variants that carry those
-  fields. Route TLS-form entries to `CTLSServer` (home side) or
-  `CTLSClient` (field side) instead of the UDP path.
-- **`interlink.cpp/.h`** — Extend `CInterlink` with a transport enum
-  (`UDP` / `TLS`) and store the TLS credentials/paths where relevant.
-- **`protocol.cpp/.h`** — Route packets received via `TLSSession` through
-  the same processing path as UDP packets. The wrapped `M17_STREAM` /
-  `M17_PACKET` payload is byte-for-byte identical to today's UDP packet
-  body, so most handler code is unchanged.
-- **`configure.cpp/.h`** — Add parsing for `TLSEnabled`, `TLSServerCert`,
-  `TLSServerKey`, `TLSClientCert`, `TLSClientKey`, `TLSTimestampSkew`.
-- **`main.cpp`** — Start `CTLSServer` if `TLSEnabled` is true and any
-  interlink entry is TLS-form.
-- **`Makefile`** — Add `TLS` build flag; link `-lssl -lcrypto` when set.
-- **`example.mk`** — Add `TLS = true` to the template.
-- **`example.cfg`** — Add the TLS configuration block from §4.2.
-- **`README.md`** — Document the new mode.
-
-### 5.3 Estimated effort
-
-Two moderate weeks of one focused engineer for a working proof of concept
-in the fork; another one to two weeks for polish, tests, and documentation
-before opening the PR to upstream.
+- **`interlinks.cpp/.h`** — `ParseTLSLine` for `key:`, `tls:` and
+  `servercert:` lines.
+- **`protocol.cpp/.h`** — per-callsign senders so packets for a TLS peer go
+  to its session instead of UDP; TLS-received packets go through the normal
+  packet dispatch.
+- **`reflector.cpp/.h`** — reads the `MREFD_TLS_*` variables, starts and
+  stops the TLS layer, adds the `TLS` object to `mrefd.json`.
+- **`gatekeeper.cpp`** — calls the TLS reload when `mrefd.interlink`
+  changes.
+- **`Makefile`** — always links OpenSSL.
 
 ---
 
-## 6. Container / tooling changes in this repo
+## 6. Session I/O (as built)
 
-### 6.1 `.env.example` additions
+From `tlssession.cpp`. The goal is that voice stays current and data
+arrives, on links from LAN speed down to a few kbit/s.
 
-```
-# ---- TLS interlink ----
-# Enable the TCP/TLS listener alongside the UDP interlink.
-MREFD_TLS_ENABLED=false
+- **One I/O thread per link.** After BIRTH, `RunIO()` switches the socket to
+  non-blocking and becomes the only thread touching the `SSL*`. It
+  `poll()`s the socket plus a self-pipe. The reflector hands it frames
+  through `Send()` / `SendControl()`, which only queue and never block, so a
+  slow link can't stall the reflector. An idle link sleeps in `poll()`.
+- **Priority: control, then voice, then data.** Control frames (PONG,
+  DISCONNECT) are never dropped and go first. Data goes only when no voice
+  is waiting.
+- **Voice is kept current; data is reliable.** Voice that has waited in
+  mrefd's queue longer than `MREFD_TLS_MAX_AUDIO_MS` (default 200 ms, about
+  five M17 frames) is dropped, not sent late. Data (packet mode) is never
+  dropped for age; only if its queue passes `MREFD_TLS_DATA_QUEUE_KB` are
+  the oldest data frames dropped. Network latency by itself never causes
+  drops; only a link slower than the voice does.
+- **Backlog check.** M17 frames are handed to the socket only when they'll
+  get through in time. The loop reads the kernel's outq (`SIOCOUTQ`, unsent
+  plus unacknowledged bytes), estimates the ack rate from how fast that
+  drains, and takes RTT from `TCP_INFO`. Queueing shows up as RTT above the
+  path's base RTT (a windowed minimum over the last 10–20 s, so it follows a
+  path change such as a Starlink handoff). If queueing exceeds the voice
+  budget, or bytes in flight exceed about twice what the link clears in a
+  base RTT plus the budget, frames stay in mrefd's queue, where stale voice
+  can still be dropped. A few frames (512 bytes) may always be in flight.
+  `TCP_NOTSENT_LOWAT` keeps the kernel's unsent backlog to a few frames and
+  `TCP_NODELAY` is set.
+- **Small batching.** When several frames are waiting they go in one TLS
+  record, up to about one TCP segment (1200 bytes), but never more than the
+  link can clear within the budget; on 8 kbit/s that is a frame or two.
+- **TCP keepalive and no connect timeout** (§2.4).
+- **Voice delay trend.** Each sent voice frame's lateness (time queued in
+  mrefd plus network queueing above base RTT) is tracked per transmission.
+  Each second keeps its least-late frame; if that floor rises for two
+  seconds running, or creeps up by three frames' worth (120 ms) and keeps
+  rising, the trend is "growing" and the log says the link is falling behind
+  (once per transmission). A steady delay is fine. `mrefd.json` reports
+  `VoiceTrend` as idle / steady / growing, plus `VoiceLateMs`,
+  `VoiceQueue`, `VoiceQueuePeak`, `VoiceDropped` and `VoiceDroppedRecent`.
+  While stale voice is being dropped, the log says so every 10 s and
+  suggests using data (packet mode) on that link.
 
-# Reflector's own TLS server credentials (home-side accepting).
-MREFD_TLS_SERVER_CERT=/etc/mrefd/tls/server.crt
-MREFD_TLS_SERVER_KEY=/etc/mrefd/tls/server.key
-
-# Reflector's own TLS client credentials (field-side initiating).
-MREFD_TLS_CLIENT_CERT=/etc/mrefd/tls/client.crt
-MREFD_TLS_CLIENT_KEY=/etc/mrefd/tls/client.key
-
-# Allowed clock-skew window on BIRTH timestamps, in seconds.
-MREFD_TLS_TIMESTAMP_SKEW=300
-```
-
-### 6.2 Dockerfile changes
-
-- `docker/mrefd/Dockerfile` build stage: add `libssl-dev` to the apt-get
-  install list.
-- Runtime stage: add `libssl3` to the runtime image.
-- Optional: add `openssl` binary to the runtime image so admins can inspect
-  certs from inside the container.
-
-### 6.3 Compose changes
-
-- `docker-compose.yml`: publish TCP 17000 in addition to UDP 17000 (host
-  mode already exposes both, but the bridge-mode overlay
-  `docker-compose.bridge.yml` needs the extra TCP publish added).
-- Add a bind mount for `./config/tls/` into `/etc/mrefd/tls/` so
-  certificates and peer keyfiles are host-managed.
-
-### 6.4 Wizard (`scripts/init.sh`) additions
-
-Add a "TLS interlink" section:
-- Ask whether this instance is a home (server), field (client), or both.
-- For home: offer to generate `server.crt` / `server.key` if absent.
-- For field: offer to generate `client.crt` / `client.key` if absent.
-- For field: prompt for home reflector's public address and cert file path.
-- Print the resulting cert fingerprint for enrollment.
-
-### 6.5 Directory layout under `./config/`
-
-```
-./config/
-├── mrefd.interlink       # extended syntax
-├── mrefd.whitelist
-├── mrefd.blacklist
-└── tls/
-    ├── server.crt        # this reflector's server cert (home mode)
-    ├── server.key        # (0600, mrefd only)
-    ├── client.crt        # this reflector's client cert (field mode)
-    ├── client.key        # (0600)
-    ├── home.pem          # pinned server cert of upstream (field mode)
-    └── peers/            # home-side directory of accepted peer certs
-        ├── W5GGW.pub.pem
-        ├── W5GGW-C.pub.pem
-        └── K7ABC-B.pub.pem
-```
+Voice over the TLS link needs about 31 kbit/s each way (each 61-byte M17
+frame is about 150 bytes with TLS/TCP/IP overhead). Below that, voice
+breaks up while data still gets through.
 
 ---
 
-## 7. CLI tools for key management
+## 7. Key management scripts
 
-A small set of scripts in `scripts/` for common admin tasks. All scripts
-assume they run on the host (not inside the container) with normal user
-privileges except where noted.
+The scripts live in `scripts/` and are also installed in the image as
+`tls-genkey`, `tls-add-peer`, `tls-add-hub`, `tls-remove-peer`,
+`tls-list-peers`, `tls-rotate-server-cert` and `tls-verify`. They share
+`tls-common.sh`: every one but `tls-verify` takes `--config <dir>` (default:
+`$M17_CONFIG_DIR`, else the repo's `config/`, else `/etc/mrefd` in the
+image), accepts lowercase, and finds Homebrew `openssl@3` on macOS. Usage
+and examples are in [`deploy/CERTS.md`](../deploy/CERTS.md).
 
-### 7.1 `scripts/tls-genkey.sh`
+| Script                    | Side  | What it does |
+|---------------------------|-------|--------------|
+| `tls-genkey.sh`           | both  | Makes an Ed25519 key and self-signed cert: `tls/client.*` (field, `--identity` = operator's bare callsign) or `tls/server.*` (`--role hub`, `--identity` = reflector callsign). Prints the SPKI fingerprint. `--force` to replace. |
+| `tls-add-peer.sh`         | hub   | Copies an operator's cert to `tls/peers/<CALL>.pub.pem` and writes the `key:` line. CN taken from the cert. Refuses a different key for an existing callsign without `--force`, and a key already registered under another name. Rerun with new `--modules` to change modules. Live. |
+| `tls-remove-peer.sh`      | hub   | Removes the operator's line and cert (`--keep-cert` to keep the file). mrefd disconnects all their nodes within seconds. |
+| `tls-add-hub.sh`          | field | Copies the hub cert to `tls/hubs/<M17-XXX>.crt` and writes the `tls:` line for one module. `--remove` to drop a hub. Restart the node afterwards. |
+| `tls-list-peers.sh`       | both  | Registered keys with modules, fingerprint and connected nodes (hub); hubs with link state and last error (field). Reads `mrefd.json`, via `docker exec` if needed. `--json` available. |
+| `tls-rotate-server-cert.sh` | hub | Keeps the old pair as `*.<timestamp>.bak` and makes a new hub key. Restart the hub; every field operator reruns `tls-add-hub.sh` with the new cert. |
+| `tls-verify.sh`           | field | Checks the hub is reachable on TCP and does a TLS handshake; prints the hub cert's CN and fingerprint and compares it with `--expect-fingerprint`. Whether the hub accepts *your* key is decided after the handshake; the node's log and dashboard report that. |
 
-Generate a fresh Ed25519 keypair and self-signed cert. Usable in either
-role (server or client). Prints the fingerprint.
-
-```
-scripts/tls-genkey.sh --identity W5GGW \
-    --out ./config/tls/client
-# writes client.crt and client.key (0600)
-# prints SPKI SHA-256 fingerprint for out-of-band sharing
-```
-
-### 7.2 `scripts/tls-add-peer.sh`  (home-side)
-
-Register a field's public cert in the local registry and append the
-matching line to `mrefd.interlink`.
-
-```
-scripts/tls-add-peer.sh --identity W5GGW \
-    --cert /path/to/W5GGW.pub.pem \
-    --modules BCD
-# copies cert to ./config/tls/peers/W5GGW.pub.pem
-# appends: "W5GGW BCD key:/etc/mrefd/tls/peers/W5GGW.pub.pem"
-# mrefd hot-reloads mrefd.interlink; new peer is immediately accepted
-```
-
-Refuses to register a duplicate identity; refuses if the cert file's
-fingerprint conflicts with an existing peer's.
-
-### 7.3 `scripts/tls-remove-peer.sh`  (home-side)
-
-Revoke a field. Removes the interlink line, deletes the peer cert, AND
-tears down any active session for that identity.
-
-```
-scripts/tls-remove-peer.sh --identity W5GGW
-```
-
-Steps performed, in order:
-1. Delete `./config/tls/peers/W5GGW.pub.pem`.
-2. Remove the matching line from `mrefd.interlink`.
-   (mrefd's file watcher picks up both changes within seconds.)
-3. Send a signal into the mrefd container to close any live session for
-   the identity — either via a Unix-domain admin socket (preferred; new
-   feature) or as a fallback, look up the peer's currently-recorded
-   source IP from the JSON status file and insert an `iptables` REJECT
-   rule that kills the TCP session immediately.
-
-### 7.4 `scripts/tls-list-peers.sh`
-
-Print the current peer registry: identity, cert fingerprint, modules,
-whether a session is currently connected, and (if so) source IP and
-session duration.
-
-### 7.5 `scripts/tls-rotate-server-cert.sh`
-
-Generate a new server keypair, install it, restart the TLS listener
-(existing sessions dropped and re-birthed). Prints the new fingerprint
-for redistribution.
-
-### 7.6 `scripts/tls-verify.sh`
-
-Diagnostic. Attempts a TLS handshake against a running mrefd TLS listener
-(local or remote) with the given client cert, and reports success/failure
-of each stage: TCP connect, TLS handshake, server-cert match, BIRTH
-exchange, ACCEPT/REJECT reason code. Meant to be the first thing a field
-operator runs to diagnose "why can't I connect?"
-
-### 7.7 Admin socket in mrefd
-
-To support §7.3 cleanly, mrefd grows a Unix-domain admin socket (path
-configurable, default `/var/run/mrefd/admin.sock`) with a small text
-protocol:
-
-```
-DISCONNECT <identity>       # close active session, log the reason
-STATUS                       # print peer table with connection state
-RELOAD                       # explicit re-read of interlink and cert store
-```
-
-The socket is 0600 owned by the mrefd user; the CLI scripts `sudo` into
-it as needed.
+There is no admin socket and no iptables step: revocation works through hot
+reload (§2.3).
 
 ---
 
-## 8. Deployment guide
+## 8. Operations
 
-### 8.1 Public reflector (home)
+Setup, revocation and rotation procedures are in
+[`deploy/CERTS.md`](../deploy/CERTS.md). What to watch:
 
-1. `make init` sets role = home, generates server cert.
-2. Publish the server cert fingerprint on your website / DVREF entry.
-3. As field operators send their public certs, run
-   `scripts/tls-add-peer.sh` for each.
-4. `make up` starts the container; both UDP and TCP 17000 are listening.
-
-### 8.2 Field kit
-
-1. `make init` sets role = field, generates client cert.
-2. Note the printed identity + fingerprint; send to home operator with
-   the modules you want to share.
-3. Download the home's server cert (pinned trust).
-4. `make up` starts the container. On WAN availability, the field TLS
-   client connects out to the home, sends BIRTH, receives ACCEPT, peer
-   entry is installed. Interlink traffic flows.
-
-### 8.3 Revoking a field
-
-1. Home operator: `scripts/tls-remove-peer.sh --identity W5GGW`.
-2. mrefd hot-reloads config, admin socket closes the live session, cert
-   is deleted from disk. Field's future reconnect attempts get REJECT
-   reason 0x01 (Unknown identity).
-
-### 8.4 Field key rotation
-
-1. Field: `scripts/tls-genkey.sh --identity <same>` to regenerate.
-2. Send the new public cert to home.
-3. Home: `scripts/tls-add-peer.sh --identity <same> --cert <new>`
-   (replaces the old cert file; hot-reload happens automatically).
-4. Field: restart mrefd; new cert takes effect on next connect.
+- **Logs:** `link UP` / `link DOWN ... after <duration>: <reason> (frames
+  in N, out N, stale voice dropped N)`. Reasons are plain English: keepalive
+  timeout, peer reset, "peer sent DISCONNECT", DNS failure, refused, hub
+  rejected us (key not registered / module not allowed / clock skew).
+  Connect attempts are logged for the first three, then every 10th, with how
+  long the link has been down.
+- **`mrefd.json`:** a `TLS` object with `Listening`, `Registrations` and
+  `Links[]` (State connected/connecting/retrying/disconnected, LastError,
+  FramesIn/Out and the voice fields in §6).
+- **Dashboard:** a "TLS Links" page and a badge on every page: green link
+  up, yellow voice falling behind (delay growing), red stale voice being
+  dropped or link down, grey waiting for nodes.
 
 ---
 
 ## 9. Phasing
 
-**Phase 0 — Design (this document).**
-Land it in the `greggwon/M17export` repo as the working spec. Share with
-N7TAE early for gross-shape feedback before writing code.
+**Phase 0 — Design.** Done (this document, now updated to the build).
 
-**Phase 1 — Reference implementation in `greggwon/mrefd` fork.**
-Land the source changes from §5. Ship a working proof of concept behind
-the `TLS = true` build flag. All existing UDP interlink behavior unchanged
-when the flag is off. Publish the container repo changes from §6 alongside
-so field operators can try it end-to-end.
+**Phase 1 — Reference implementation in the `greggwon/mrefd` fork.** Done.
+TLS is always compiled in; UDP interlink behavior is unchanged.
 
-**Phase 2 — Container tooling and CLI scripts.**
-The §7 CLI tools; the wizard integration; documentation refresh in the
-top-level `README.md`. Multi-arch image published to a public registry.
+**Phase 2 — Container tooling and scripts.** Done: the §7 scripts (also in
+the image), entrypoint key discovery, `config/tls` mounts in both compose
+files, dashboard TLS page and badge, README and `deploy/CERTS.md`.
 
-**Phase 3 — PR to `n7tae/mrefd`.**
-Once the fork has run in production long enough to shake out real bugs
-(target: one full ARES exercise cycle), open the PR. Expect design
-iteration from N7TAE — the wire format and config syntax are likely to
-attract comments.
+**Phase 3 — PR to `n7tae/mrefd`.** Not started. Waiting for production time
+(target: one full ARES exercise cycle). Expect iteration on wire format and
+config syntax.
 
-**Phase 4 — M17 Foundation spec proposal.**
-Once N7TAE and any other reflector maintainers are aligned, write up the
-handshake and framing as a formal addition to the M17 interlink spec so
-URFD and any future reflector can implement compatibly.
+**Phase 4 — M17 Foundation spec proposal.** Not started.
 
-**Phase 5 — URFD implementation.**
-Contribute the same auth mechanism to URFD's M17 interlink path so a
-URFD-hosted talkgroup can be reached from a private field mrefd without
-either side hand-configuring IPs.
+**Phase 5 — URFD implementation.** Not started.
 
 ---
 
 ## 10. Open questions
 
-Not blockers for beginning implementation, but worth capturing:
-
-1. **Key format on disk.** Store peer certs as PEM (`-----BEGIN CERTIFICATE-----`)
-   for openssl-compatibility, or raw SPKI? PEM is the friendlier default and
-   admins can inspect with `openssl x509 -text`. Recommendation: PEM.
-2. **Multiple simultaneous sessions per identity.** One certificate may
-   back several nodes at once, one per module (`W5GGW-B`, `W5GGW-C`).
-   If a second connection arrives asserting a module that is already
-   connected for that key, should the older one be terminated (last-write
-   wins) or the newer one rejected? Recommendation: last-write wins with a
-   log line, matching typical operator expectation after a field
-   reconnect from a different network.
-3. **Admin socket UX.** The §7.7 socket protocol is intentionally sparse.
-   A future iteration could expose it as a JSON-RPC endpoint and let a
-   web dashboard hook in without a separate control channel.
-4. **Cross-arch cert format compatibility.** Ed25519 self-signed certs
-   generated on any platform should be byte-identical on any other. Worth
-   verifying in test on `linux/arm/v7` specifically (32-bit BIGNUM path
-   in OpenSSL has surfaced portability issues historically).
+1. **Key format on disk.** Decided: PEM certificates (`.crt`, `.pub.pem`).
+2. **Multiple sessions for one node name.** Decided: the newest connection
+   wins and the older one is aborted with a log line. Different modules on
+   one key are separate nodes and run side by side.
+3. **Admin socket.** Dropped: not built and not needed, since hot reload
+   disconnects revoked keys and removed modules.
+4. **Cross-arch cert compatibility.** Still worth checking on `linux/arm/v7`
+   specifically.
+5. **Ham-DHT on hubs.** Open. Field nodes run without DHT. Whether hubs also
+   publish on Ham-DHT is undecided; both builds work.
+6. **Field-side hot reload.** Adding or changing a field node's `tls:` line
+   currently needs a restart of that node.
+7. **IPv6 literals in `tls:` lines.** Not supported yet; use a DNS name.
+8. **CA-signed operator certs.** A possible future acceptance path for large
+   deployments; see `deploy/CERTS.md`.
 
 ---
 
 ## 11. References
 
-- `mrefd/interlinks.cpp:58` — current interlink file parser.
-- `mrefd/interlink.cpp:45` — hostname-rejection check.
-- `mrefd/ip.cpp:43` — `getaddrinfo`-based address parser (unused by current
-  interlink path; could be reused if hostnames were later accepted).
-- `mrefd/example.cfg` — current runtime config schema.
-- `mrefd/config/mrefd.interlink` — current interlink file format documentation.
+- `mrefd/framing.h`, `mrefd/birth.h` — wire format.
+- `mrefd/tlsserver.cpp`, `mrefd/tlsclient.cpp` — handshake and BIRTH checks.
+- `mrefd/tlssession.cpp` — session I/O (§6).
+- `mrefd/tlsinterlinks.cpp` — registry, reload, retry, routing, status.
+- `mrefd/interlinks.cpp` — interlink file parser, `ParseTLSLine`.
+- `mrefd/interlink.cpp` — UDP peer address check (literal addresses only).
 - M17 Foundation protocol docs — https://m17project.org/
 - Ed25519 signing scheme — RFC 8032.
 - TLS raw public keys (alternative to self-signed certs) — RFC 7250.

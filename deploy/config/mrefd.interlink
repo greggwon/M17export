@@ -6,9 +6,12 @@
 #   M17-URF  45.32.11.22  17000  BCD      static IP/port
 #   M17-QQQL 44.45.45.100 ABC             pre-1.0 "legacy L" peer
 #
-# TLS forms (authenticated, IP-independent):
-#   Hub: register an operator's key (one per operator, not per node). Their
-#   nodes may each assert one of these modules and appear as W5GGW-B, ...
-#     W5GGW    BCD  key:/etc/mrefd/tls/peers/W5GGW.pub.pem
-#   Field node: dial the hub, asserting the ONE module this node links.
-#     M17-HOM  B    tls:home.example.org:17000  servercert:/etc/mrefd/tls/home.pem
+# TLS forms (field nodes linking to a hub). The tls-* scripts write these;
+# you don't need to type them. Modules may be written B,C or BC.
+#   Hub: one line per field operator's key (tls-add-peer). Their nodes may
+#   each link one of these modules, and appear here as W5ABC-B, W5ABC-C.
+#   Changes apply within seconds, including disconnecting revoked nodes.
+#     W5ABC    B,C  key:/etc/mrefd/tls/peers/W5ABC.pub.pem
+#   Field node: one line per hub (tls-add-hub), linking ONE module.
+#   Restart the node after changing it.
+#     M17-HUB  B    tls:hub.example.org:17000  servercert:/etc/mrefd/tls/hubs/M17-HUB.crt

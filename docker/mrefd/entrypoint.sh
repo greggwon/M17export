@@ -11,17 +11,34 @@ CFG=/etc/mrefd/mrefd.cfg
 die() { echo "entrypoint: ERROR: $*" >&2; exit 1; }
 note() { echo "entrypoint: $*" >&2; }
 
+# Module lists may be written any reasonable way: BCD, B,C,D, "b c d".
+# Prints them as plain letters (BCD), each once, or fails on anything else.
+normalize_modules() {
+    local in="$1" out="" c
+    in=$(printf '%s' "$in" | tr '[:lower:]' '[:upper:]' | tr -d ' \t,;/|+')
+    [[ "$in" =~ ^[A-Z]*$ ]] || return 1
+    for (( i=0; i<${#in}; i++ )); do
+        c="${in:i:1}"
+        [[ "$out" == *"$c"* ]] || out+="$c"
+    done
+    printf '%s' "$out"
+}
+
 # ---- required fields --------------------------------------------------------
 : "${MREFD_CALLSIGN:?MREFD_CALLSIGN is required (e.g. M17-XYZ)}"
-: "${MREFD_MODULES:?MREFD_MODULES is required (e.g. BCD)}"
-: "${MREFD_COUNTRY:?MREFD_COUNTRY is required (ISO-3166-1 alpha-2, e.g. US)}"
-: "${MREFD_EMAIL:?MREFD_EMAIL is required}"
-: "${MREFD_DASHBOARD_URL:?MREFD_DASHBOARD_URL is required}"
+: "${MREFD_MODULES:?MREFD_MODULES is required (e.g. B,C,D)}"
 
+MREFD_CALLSIGN=$(printf '%s' "$MREFD_CALLSIGN" | tr '[:lower:]' '[:upper:]')
 [[ "$MREFD_CALLSIGN" =~ ^M17-[A-Z0-9]{3}$ ]] || \
-    die "MREFD_CALLSIGN must be 'M17-' followed by 3 A-Z/0-9 chars (got '$MREFD_CALLSIGN')"
-[[ "$MREFD_MODULES" =~ ^[A-Z]+$ ]] || \
-    die "MREFD_MODULES must be uppercase A-Z letters only (got '$MREFD_MODULES')"
+    die "MREFD_CALLSIGN must be 'M17-' followed by 3 letters or digits, e.g. M17-XYZ (got '$MREFD_CALLSIGN')"
+_raw="$MREFD_MODULES"
+MREFD_MODULES=$(normalize_modules "$_raw") && [[ -n "$MREFD_MODULES" ]] || \
+    die "MREFD_MODULES must be module letters A-Z, e.g. B,C,D (got '${_raw}')"
+if [[ -n "${MREFD_ENCRYPTION_ALLOWED:-}" ]]; then
+    _raw="$MREFD_ENCRYPTION_ALLOWED"
+    MREFD_ENCRYPTION_ALLOWED=$(normalize_modules "$_raw") || \
+        die "MREFD_ENCRYPTION_ALLOWED must be module letters A-Z, e.g. C,D (got '${_raw}')"
+fi
 
 # ---- defaults ---------------------------------------------------------------
 MREFD_PORT="${MREFD_PORT:-17000}"
@@ -30,6 +47,13 @@ MREFD_IPV6_BIND="${MREFD_IPV6_BIND-::}"
 MREFD_LISTEN_ONLY_ALLOW_ENCRYPT="${MREFD_LISTEN_ONLY_ALLOW_ENCRYPT:-false}"
 MREFD_DHT_ENABLED="${MREFD_DHT_ENABLED:-false}"
 MREFD_BOOTSTRAP="${MREFD_BOOTSTRAP:-xrf757.openquad.net}"
+
+# A reflector published on Ham-DHT needs its public listing details.
+if [[ "${MREFD_DHT_ENABLED}" == "true" ]]; then
+    : "${MREFD_COUNTRY:?MREFD_COUNTRY is required with DHT on (ISO-3166-1 alpha-2, e.g. US)}"
+    : "${MREFD_EMAIL:?MREFD_EMAIL is required with DHT on}"
+    : "${MREFD_DASHBOARD_URL:?MREFD_DASHBOARD_URL is required with DHT on}"
+fi
 
 # ---- render mrefd.cfg -------------------------------------------------------
 {
@@ -90,6 +114,24 @@ for f in mrefd.whitelist mrefd.blacklist mrefd.interlink; do
     fi
 done
 
+# ---- TLS keys ---------------------------------------------------------------
+# tls-genkey.sh writes keys to config/tls/ (mounted at /etc/mrefd/tls), so
+# use them from there unless MREFD_TLS_* says otherwise.
+for pair in SERVER_CERT:server.crt SERVER_KEY:server.key CLIENT_CERT:client.crt CLIENT_KEY:client.key; do
+    var="MREFD_TLS_${pair%%:*}"
+    file="/etc/mrefd/tls/${pair#*:}"
+    if [[ -z "${!var:-}" && -f "$file" ]]; then
+        export "$var=$file"
+    fi
+    if [[ -n "${!var:-}" ]]; then
+        if [[ ! -e "${!var}" ]]; then
+            note "${var}=${!var} doesn't exist; TLS links that need it won't start"
+        elif [[ ! -r "${!var}" ]]; then
+            die "${var}=${!var} isn't readable by mrefd (uid $(id -u)). On the host: sudo chown $(id -u) config/tls/*.key"
+        fi
+    fi
+done
+
 # ---- start mrefd + Bonjour advertiser --------------------------------------
 # mrefd is the primary process; if it exits, the container exits with its
 # code. The Bonjour advertiser starts 10 seconds later so that mrefd is
@@ -107,7 +149,7 @@ shutdown() {
 }
 trap shutdown TERM INT
 
-note "starting mrefd as ${MREFD_CALLSIGN} on modules ${MREFD_MODULES}, UDP ${MREFD_PORT}"
+note "starting mrefd as ${MREFD_CALLSIGN} on modules $(printf '%s' "$MREFD_MODULES" | sed -e 's/./&,/g' -e 's/,$//'), UDP ${MREFD_PORT}"
 /usr/local/bin/mrefd "$CFG" &
 MREFD_PID=$!
 

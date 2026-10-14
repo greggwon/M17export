@@ -44,6 +44,8 @@ services:
       - ./config/mrefd.whitelist:/etc/mrefd/mrefd.whitelist
       - ./config/mrefd.blacklist:/etc/mrefd/mrefd.blacklist
       - ./config/mrefd.interlink:/etc/mrefd/mrefd.interlink
+      # TLS keys and certificates (scripts/tls-*.sh write them here).
+      - ./config/tls:/etc/mrefd/tls:ro
       # Shared with the dashboard container.
       - mrefd-log:/var/log/mrefd
       # DHT peer cache survives restarts.

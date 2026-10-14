@@ -76,6 +76,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl3-gnutls \
         ca-certificates \
         tini \
+        openssl \
+        jq \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 mrefd \
     && useradd  --system --uid 1000 --gid mrefd --home-dir /var/lib/mrefd \
@@ -86,7 +88,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build           /out/usr/local/bin/mrefd  /usr/local/bin/mrefd
 COPY --from=advertise-build /out/m17-advertise        /usr/local/bin/m17-advertise
 COPY docker/mrefd/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /usr/local/bin/m17-advertise
+# The tls-* key-management scripts, so any host with docker can run them:
+#   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/mrefd" \
+#       --entrypoint tls-genkey <image> --identity W5ABC
+COPY scripts/tls-common.sh /usr/local/bin/tls-common.sh
+COPY scripts/tls-genkey.sh              /usr/local/bin/tls-genkey
+COPY scripts/tls-add-peer.sh            /usr/local/bin/tls-add-peer
+COPY scripts/tls-add-hub.sh             /usr/local/bin/tls-add-hub
+COPY scripts/tls-remove-peer.sh         /usr/local/bin/tls-remove-peer
+COPY scripts/tls-list-peers.sh          /usr/local/bin/tls-list-peers
+COPY scripts/tls-rotate-server-cert.sh  /usr/local/bin/tls-rotate-server-cert
+COPY scripts/tls-verify.sh              /usr/local/bin/tls-verify
+ENV M17_CONFIG_DIR=/etc/mrefd
+RUN chmod +x /entrypoint.sh /usr/local/bin/m17-advertise /usr/local/bin/tls-*
 
 USER mrefd
 
