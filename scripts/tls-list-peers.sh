@@ -85,9 +85,9 @@ lookup_nodes() {
     local id="$1"
     if [[ -r "$JSON_STATUS_PATH" ]] && command -v jq >/dev/null 2>&1; then
         jq -r --arg id "$id" '
-            (.tls_peers // .peers // [])[]
-            | select((.identity // .callsign) | startswith($id + "-"))
-            | "\(.identity // .callsign)@\(.ip // .addr // .source_ip // "?")"
+            (.TLS.Links // [])[]
+            | select(.Direction == "incoming" and .Key == $id and .State == "connected")
+            | "\(.Name)@\(.Address)"
         ' "$JSON_STATUS_PATH" 2>/dev/null | sort -u | paste -sd' ' -
     fi
 }

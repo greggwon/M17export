@@ -48,10 +48,53 @@ type Reflector struct {
 	Sponsor        string   `json:"sponsor,omitempty"`
 	Country        string   `json:"country,omitempty"`
 	Description    string   `json:"description,omitempty"`
-	Modules        []string `json:"modules,omitempty"`
-	Encrypted      []string `json:"encrypted,omitempty"`
+	Modules        ModuleList `json:"modules,omitempty"`
+	Encrypted      ModuleList `json:"encrypted,omitempty"`
 	NetworkType    string   `json:"network_type,omitempty"`
 	IPSource       string   `json:"ip_source,omitempty"`
+}
+
+// ModuleList is a set of module letters. It is deliberately forgiving about
+// how it is written - a JSON array (["B","C","D"]) or a string ("B,C,D",
+// "BCD", "B C D") - since being lenient on input is what keeps us compatible
+// with whatever form a directory or operator supplies. Output is always the
+// comma-separated form DVREF's data uses.
+type ModuleList []string
+
+// UnmarshalJSON accepts either an array of strings or a single string.
+func (m *ModuleList) UnmarshalJSON(b []byte) error {
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err == nil {
+		*m = parseModules(strings.Join(arr, ","))
+		return nil
+	}
+	var str string
+	if err := json.Unmarshal(b, &str); err != nil {
+		return fmt.Errorf("modules: want an array or a string, got %s", b)
+	}
+	*m = parseModules(str)
+	return nil
+}
+
+// parseModules splits on commas and whitespace; a token made only of
+// letters ("BCD") is taken as one module per letter. Returns nil if empty.
+func parseModules(s string) ModuleList {
+	var out ModuleList
+	for _, tok := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == ';'
+	}) {
+		tok = strings.ToUpper(strings.TrimSpace(tok))
+		if len(tok) > 1 && strings.Trim(tok, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "" {
+			for _, c := range tok {
+				out = append(out, string(c))
+			}
+			continue
+		}
+		if tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 // --------------------------------------------------------------------------
@@ -109,8 +152,10 @@ func buildTXT(r Reflector) []string {
 	if r.Port > 0 {
 		txt = appendTXT(txt, "port", strconv.Itoa(r.Port))
 	}
-	txt = appendTXT(txt, "modules", strings.Join(r.Modules, ""))
-	txt = appendTXT(txt, "encrypted", strings.Join(r.Encrypted, ""))
+	// Comma-separated, the form DVREF's reflector data uses ("A,B,C,D")
+	// and the form MSeven parses.
+	txt = appendTXT(txt, "modules", strings.Join([]string(r.Modules), ","))
+	txt = appendTXT(txt, "encrypted", strings.Join([]string(r.Encrypted), ","))
 	txt = appendTXT(txt, "network_type", r.NetworkType)
 	txt = appendTXT(txt, "ip_source", r.IPSource)
 	txt = appendTXT(txt, "description", r.Description)
@@ -120,21 +165,6 @@ func buildTXT(r Reflector) []string {
 // --------------------------------------------------------------------------
 // CLI plumbing
 // --------------------------------------------------------------------------
-
-// commaSplit returns nil for empty, else the trimmed comma-separated tokens.
-func commaSplit(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			out = append(out, t)
-		}
-	}
-	return out
-}
 
 // Applies non-empty CLI flag values on top of a Reflector (typically loaded
 // from --config JSON). Empty flag values leave the field untouched.
@@ -172,10 +202,10 @@ func overlayCLI(r *Reflector, f *cliFlags) {
 	if f.description != "" {
 		r.Description = f.description
 	}
-	if mods := commaSplit(f.modules); mods != nil {
+	if mods := parseModules(f.modules); mods != nil {
 		r.Modules = mods
 	}
-	if enc := commaSplit(f.encrypted); enc != nil {
+	if enc := parseModules(f.encrypted); enc != nil {
 		r.Encrypted = enc
 	}
 	if f.networkType != "" {
@@ -224,8 +254,8 @@ func parseFlags() *cliFlags {
 	flag.StringVar(&f.sponsor, "sponsor", "", "sponsoring operator/club/organization")
 	flag.StringVar(&f.country, "country", "", "ISO 3166-1 alpha-2 country code")
 	flag.StringVar(&f.description, "description", "", "free-text description (HTML permitted)")
-	flag.StringVar(&f.modules, "modules", "", "comma-separated list of enabled module letters, e.g. \"A,B,C\"")
-	flag.StringVar(&f.encrypted, "encrypted", "", "comma-separated modules that permit encrypted streams")
+	flag.StringVar(&f.modules, "modules", "", "enabled module letters, e.g. \"A,B,C\" or \"ABC\"")
+	flag.StringVar(&f.encrypted, "encrypted", "", "modules that permit encrypted streams, e.g. \"D\" or \"C,D\"")
 	flag.StringVar(&f.networkType, "network-type", "", "\"hosting\", \"business\", \"residential\", etc.")
 	flag.StringVar(&f.ipSource, "ip-source", "", "how the reflector's IP is resolved: \"dns\" or \"static\"")
 

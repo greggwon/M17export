@@ -564,6 +564,7 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
 </tbody></table></div>
 
 <h3>mDNS advertiser</h3>
+<p>The container announces the reflector on the local network as a <code>_m17._udp</code> service, so M17 apps on the same Wi-Fi or Ethernet, such as MSeven, list it automatically and connect with a tap. No one has to type an address, and no internet connection or DNS server is needed. That is what makes a field node usable at a shelter or event the moment it powers up. These settings control what the announcement says. <a href="#mdns">Section 9, mDNS discovery for local support networks</a>, explains how it works, why it suits support networks, and how to test it.</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
 <tbody>
@@ -718,7 +719,7 @@ m17-xyz._m17._udp.local.         SRV   0 0 17000 fieldpi.local.
 m17-xyz._m17._udp.local.         TXT   "type=reflector" "designator=XYZ" "slug=m17-xyz"
                                        "name=Tulsa EOC Field Node" "sponsor=Tulsa ARC"
                                        "country=US" "url=https://m17.club.org"
-                                       "ipv4=192.168.1.40" "port=17000" "modules=BCD"
+                                       "ipv4=192.168.1.40" "port=17000" "modules=B,C,D"
 
 <span class="c">; 4. A / AAAA — "fieldpi is at these addresses"</span>
 fieldpi.local.                   A     192.168.1.40
@@ -741,8 +742,8 @@ fieldpi.local.                   AAAA  2001:db8:10::40</code></pre>
 <tr><td><code>ipv4</code></td><td><code>192.168.1.40</code></td><td><code>MREFD_IPV4_EXT</code>, else auto-detected</td><td>Address to connect to. If not set, the IPv4 of the default-route interface.</td></tr>
 <tr><td><code>ipv6</code></td><td><code>2001:db8:10::40</code></td><td><code>MREFD_IPV6_EXT</code>, else auto-detected</td><td>As above, for IPv6.</td></tr>
 <tr><td><code>port</code></td><td><code>17000</code></td><td><code>MREFD_PORT</code></td><td>UDP port. Also carried in the SRV record.</td></tr>
-<tr><td><code>modules</code></td><td><code>BCD</code></td><td><code>MREFD_MODULES</code></td><td>Enabled modules, concatenated letters.</td></tr>
-<tr><td><code>encrypted</code></td><td><code>D</code></td><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td>Modules that permit encryption.</td></tr>
+<tr><td><code>modules</code></td><td><code>B,C,D</code></td><td><code>MREFD_MODULES</code></td><td>Enabled modules, comma-separated, the same form DVREF's reflector data uses.</td></tr>
+<tr><td><code>encrypted</code></td><td><code>D</code></td><td><code>MREFD_ENCRYPTION_ALLOWED</code></td><td>Modules that permit encryption, comma-separated.</td></tr>
 <tr><td><code>network_type</code></td><td><code>residential</code></td><td><code>MREFD_ADVERTISE_NETWORK_TYPE</code></td><td><code>hosting</code> / <code>business</code> / <code>residential</code>.</td></tr>
 <tr><td><code>ip_source</code></td><td><code>static</code></td><td>site.json / <code>--ip-source</code></td><td>How the address was obtained: <code>dns</code> or <code>static</code>.</td></tr>
 <tr><td><code>description</code></td><td><code>Shelter net, 24h</code></td><td><code>MREFD_ADVERTISE_DESCRIPTION</code></td><td>Free text. HTML permitted.</td></tr>
@@ -782,6 +783,7 @@ MREFD_ADVERTISE_NETWORK_TYPE=residential</code></pre>
   "network_type": "residential",
   "ip_source": "dns"
 }</code></pre>
+<p><code>modules</code> and <code>encrypted</code> may be written as an array, as above, or as a string such as <code>"B,C,D"</code> or <code>"BCD"</code>. The advertiser accepts any of these and always advertises the comma-separated form.</p>
 <p>Then mount it into the container by adding a line to the <code>volumes:</code> list of the <code>mrefd</code> service:</p>
 <pre><code>      - ./config/site.json:/etc/mrefd/site.json:ro</code></pre>
 
@@ -808,7 +810,7 @@ m17-advertise: publishing "m17-xyz" on _m17._udp port 17000
   TXT: url=https://reflector.example.net
   TXT: ipv4=192.168.1.112
   TXT: port=17000
-  TXT: modules=ABCD
+  TXT: modules=A,B,C,D
   TXT: network_type=residential
 m17-advertise: --dry-run; not publishing.</code></pre>
 <div class="table-wrap"><table>
@@ -818,7 +820,7 @@ m17-advertise: --dry-run; not publishing.</code></pre>
 <tr><td><code>--designator</code>, <code>--slug</code>, <code>--name</code>, <code>--url</code>, <code>--dns</code></td><td>Identity and display fields.</td></tr>
 <tr><td><code>--ipv4</code>, <code>--ipv6</code></td><td>Addresses placed in TXT. Auto-detected from the default-route interface if omitted.</td></tr>
 <tr><td><code>--port</code></td><td>UDP port. Default 17000.</td></tr>
-<tr><td><code>--modules</code>, <code>--encrypted</code></td><td>Comma-separated letters, e.g. <code>B,C,D</code>.</td></tr>
+<tr><td><code>--modules</code>, <code>--encrypted</code></td><td>Module letters in any common form: <code>B,C,D</code>, <code>BCD</code> or <code>"B C D"</code>. Always advertised as <code>B,C,D</code>.</td></tr>
 <tr><td><code>--sponsor</code>, <code>--country</code>, <code>--description</code>, <code>--network-type</code>, <code>--ip-source</code></td><td>Metadata.</td></tr>
 <tr><td><code>--instance-name</code></td><td>Override the DNS-SD instance name.</td></tr>
 <tr><td><code>--iface</code></td><td>Advertise on one interface only (e.g. <code>wlan0</code>). Default: all interfaces that are up.</td></tr>
@@ -891,7 +893,7 @@ sudo tcpdump -i any -n udp port 5353</code></pre>
 <ol>
   <li>Browse for <code>_m17._udp</code> in domain <code>local.</code>, using the platform API: <code>NWBrowser</code>/<code>NetServiceBrowser</code> on Apple platforms, <code>NsdManager</code> on Android, Avahi D-Bus or a library such as <code>zeroconf</code> elsewhere.</li>
   <li>For each instance, resolve SRV and TXT. Treat <code>type=reflector</code> as a reflector entry, and ignore unknown <code>type</code> values.</li>
-  <li>Parse TXT into a dictionary. Merge numbered keys (<code>description0</code>, <code>description1</code>, …) back into their base key. Split <code>modules</code> and <code>encrypted</code> into individual letters.</li>
+  <li>Parse TXT into a dictionary. Merge numbered keys (<code>description0</code>, <code>description1</code>, …) back into their base key. Split <code>modules</code> and <code>encrypted</code> on commas into module letters.</li>
   <li>Pick the connect address in this order: TXT <code>ipv6</code>/<code>ipv4</code> when present and reachable, then the resolved SRV target's addresses. Use <code>port</code> from SRV, falling back to TXT and then 17000.</li>
   <li>Show discovered reflectors in a "Nearby" section, separate from the internet directory, and remove them when the browser reports the service gone.</li>
   <li>Deduplicate against the internet directory by <code>designator</code>/<code>slug</code>, but prefer the LAN address while it is on the local network.</li>
